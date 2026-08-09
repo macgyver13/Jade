@@ -11,6 +11,7 @@
 #include "random.h"
 #include "rsa.h"
 #include "storage.h"
+#include "utils/bech32m.h"
 #include "utils/malloc_ext.h"
 #include "utils/shake256.h"
 #include "utils/util.h"
@@ -57,6 +58,44 @@ static const size_t MNEMONIC_24_ENTROPY_BLOBLEN = 96;
             FAIL();                                                                                                    \
         }                                                                                                              \
     } while (false)
+
+static bool test_bech32m_encoding(void)
+{
+    /* First recipient from the BIP-352 reference vectors. */
+    static const char PAYLOAD_HEX[] = "0220bcfac5b99e04ad1a06ddfb016ee13582609d60b6291e98d01a9bc9a16c96d4"
+                                      "025cc9856d6f8375350e123978daac200c260cb5b5ae83106cab90484dcd8fcf36";
+    static const char EXPECTED_MAINNET[]
+        = "sp1qqgste7k9hx0qftg6qmwlkqtwuy6cycyavzmzj85c6qdfhjdpdjtdgqjuexzk6murw56suy3e0rd2cgqvycxttddwsvgx"
+          "e2usfpxumr70xc9pkqwv";
+    static const char EXPECTED_TESTNET[]
+        = "tsp1qqgste7k9hx0qftg6qmwlkqtwuy6cycyavzmzj85c6qdfhjdpdjtdgqjuexzk6murw56suy3e0rd2cgqvycxttddwsvg"
+          "xe2usfpxumr70xc3wk4yh";
+
+    uint8_t payload[66];
+    size_t written = 0;
+    if (wally_hex_to_bytes(PAYLOAD_HEX, payload, sizeof(payload), &written) != WALLY_OK || written != sizeof(payload)) {
+        FAIL();
+    }
+
+    char address[BECH32M_MAX_BUFFER_LEN];
+    if (!bech32m_encode("sp", 0, payload, sizeof(payload), address, sizeof(address))
+        || strcmp(address, EXPECTED_MAINNET) || strlen(address) != 116) {
+        FAIL();
+    }
+    if (!bech32m_encode("tsp", 0, payload, sizeof(payload), address, sizeof(address))
+        || strcmp(address, EXPECTED_TESTNET) || strlen(address) != 117) {
+        FAIL();
+    }
+
+    /* Reject invalid versions, uppercase HRPs, and undersized output buffers. */
+    if (bech32m_encode("sp", 32, payload, sizeof(payload), address, sizeof(address))
+        || bech32m_encode("SP", 0, payload, sizeof(payload), address, sizeof(address))
+        || bech32m_encode("sp", 0, payload, sizeof(payload), address, 116) || address[0] != '\0') {
+        FAIL();
+    }
+
+    return true;
+}
 
 // *All* fields are identical
 static bool all_fields_same(const keychain_t* keydata1, const keychain_t* keydata2, const bool strict_seeds)
@@ -1530,6 +1569,10 @@ static bool test_bip85_rsa_key_gen(jade_process_t* process)
 bool debug_selfcheck(jade_process_t* process)
 {
     JADE_ASSERT(process);
+
+    if (!test_bech32m_encoding()) {
+        FAIL();
+    }
 
     // Test can restore known mnemonic and service path is computed as expected
     if (!test_simple_restore()) {
