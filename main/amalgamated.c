@@ -133,6 +133,7 @@ void __wrap_abort(void);
 #include "./serial.c"
 #endif // ESP_PLATFORM
 #include "./signer.c"
+#include "./silentpayments.c"
 #ifndef CONFIG_LIBJADE
 #include "./smoketest.c"
 #endif // CONFIG_LIBJADE
