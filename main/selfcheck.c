@@ -10,6 +10,8 @@
 #include "process.h"
 #include "random.h"
 #include "rsa.h"
+#include "sensitive.h"
+#include "silentpayments.h"
 #include "storage.h"
 #include "utils/bech32m.h"
 #include "utils/malloc_ext.h"
@@ -25,6 +27,15 @@
 
 #include <wally_bip32.h>
 #include <wally_bip85.h>
+#include <wally_core.h>
+#include <wally_psbt.h>
+#include <wally_script.h>
+#include <wally_transaction.h>
+
+#include <secp256k1.h>
+#include <secp256k1_dleq.h>
+#include <secp256k1_extrakeys.h>
+#include <secp256k1_silentpayments.h>
 
 #include <cdecoder.h>
 #include <cencoder.h>
@@ -78,12 +89,16 @@ static bool test_bech32m_encoding(void)
     }
 
     char address[BECH32M_MAX_BUFFER_LEN];
-    if (!bech32m_encode("sp", 0, payload, sizeof(payload), address, sizeof(address))
+    if (!sp_encode_address(NETWORK_BITCOIN, payload, sizeof(payload), address, sizeof(address))
         || strcmp(address, EXPECTED_MAINNET) || strlen(address) != 116) {
         FAIL();
     }
-    if (!bech32m_encode("tsp", 0, payload, sizeof(payload), address, sizeof(address))
+    if (!sp_encode_address(NETWORK_BITCOIN_TESTNET, payload, sizeof(payload), address, sizeof(address))
         || strcmp(address, EXPECTED_TESTNET) || strlen(address) != 117) {
+        FAIL();
+    }
+    /* Reject a payload that is not a scan and spend pubkey pair */
+    if (sp_encode_address(NETWORK_BITCOIN, payload, sizeof(payload) - 1, address, sizeof(address))) {
         FAIL();
     }
 
@@ -94,6 +109,175 @@ static bool test_bech32m_encoding(void)
         FAIL();
     }
 
+    return true;
+}
+
+static bool test_silentpayments_eligible_scripts(void)
+{
+    uint8_t nums_internal_key[EC_XONLY_PUBLIC_KEY_LEN];
+    uint8_t regular_internal_key[EC_XONLY_PUBLIC_KEY_LEN] = { 1 };
+    size_t written = 0;
+
+    if (wally_hex_to_bytes("50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0", nums_internal_key,
+            sizeof(nums_internal_key), &written)
+            != WALLY_OK
+        || written != sizeof(nums_internal_key)) {
+        FAIL();
+    }
+
+    /* The BIP352 eligible set: P2PKH, P2WPKH, P2SH-P2WPKH and non-NUMS P2TR */
+    if (!sp_is_eligible_script(WALLY_SCRIPT_TYPE_P2PKH, WALLY_SCRIPT_TYPE_UNKNOWN, NULL, 0)
+        || !sp_is_eligible_script(WALLY_SCRIPT_TYPE_P2WPKH, WALLY_SCRIPT_TYPE_UNKNOWN, NULL, 0)
+        || !sp_is_eligible_script(WALLY_SCRIPT_TYPE_P2SH, WALLY_SCRIPT_TYPE_P2WPKH, NULL, 0)
+        || !sp_is_eligible_script(WALLY_SCRIPT_TYPE_P2TR, WALLY_SCRIPT_TYPE_UNKNOWN, NULL, 0)
+        || !sp_is_eligible_script(WALLY_SCRIPT_TYPE_P2TR, WALLY_SCRIPT_TYPE_UNKNOWN, regular_internal_key,
+            sizeof(regular_internal_key))) {
+        FAIL();
+    }
+    /* P2SH without a P2WPKH redeem script, NUMS taproot, and everything else */
+    if (sp_is_eligible_script(WALLY_SCRIPT_TYPE_P2SH, WALLY_SCRIPT_TYPE_UNKNOWN, NULL, 0)
+        || sp_is_eligible_script(WALLY_SCRIPT_TYPE_P2SH, WALLY_SCRIPT_TYPE_P2WSH, NULL, 0)
+        || sp_is_eligible_script(
+            WALLY_SCRIPT_TYPE_P2TR, WALLY_SCRIPT_TYPE_UNKNOWN, nums_internal_key, sizeof(nums_internal_key))
+        || sp_is_eligible_script(WALLY_SCRIPT_TYPE_P2WSH, WALLY_SCRIPT_TYPE_UNKNOWN, NULL, 0)
+        || sp_is_eligible_script(WALLY_SCRIPT_TYPE_MULTISIG, WALLY_SCRIPT_TYPE_UNKNOWN, NULL, 0)
+        || sp_is_eligible_script(WALLY_SCRIPT_TYPE_UNKNOWN, WALLY_SCRIPT_TYPE_UNKNOWN, NULL, 0)) {
+        FAIL();
+    }
+    return true;
+}
+
+static bool test_silentpayments_smallest_outpoint(void)
+{
+    /* Outpoints ordered by txid then little-endian vout; added out of order */
+    static const struct {
+        uint8_t txhash_first_byte;
+        uint32_t index;
+    } INPUTS[] = { { 2, 0 }, { 1, 0x100 }, { 1, 1 } };
+    /* vout 0x100 serializes as 00 01 00 00, which sorts before vout 1 */
+    static const uint8_t EXPECTED_TAIL[4] = { 0x00, 0x01, 0x00, 0x00 };
+
+    struct wally_psbt* psbt = NULL;
+    if (wally_psbt_init_alloc(WALLY_PSBT_VERSION_2, 3, 0, 0, 0, &psbt) != WALLY_OK) {
+        FAIL();
+    }
+
+    bool success = true;
+    for (size_t i = 0; i < sizeof(INPUTS) / sizeof(INPUTS[0]); ++i) {
+        uint8_t txhash[WALLY_TXHASH_LEN] = { 0 };
+        struct wally_tx_input* tx_input = NULL;
+        txhash[0] = INPUTS[i].txhash_first_byte;
+        if (wally_tx_input_init_alloc(txhash, sizeof(txhash), INPUTS[i].index, 0, NULL, 0, NULL, &tx_input)
+            != WALLY_OK) {
+            success = false;
+            break;
+        }
+        success = wally_psbt_add_tx_input_at(psbt, i, 0, tx_input) == WALLY_OK;
+        JADE_WALLY_VERIFY(wally_tx_input_free(tx_input));
+        if (!success) {
+            break;
+        }
+    }
+
+    if (success) {
+        uint8_t smallest[SP_OUTPOINT_LEN];
+        sp_smallest_outpoint(psbt, smallest);
+        success = smallest[0] == 1 && !memcmp(smallest + WALLY_TXHASH_LEN, EXPECTED_TAIL, sizeof(EXPECTED_TAIL));
+    }
+
+    JADE_WALLY_VERIFY(wally_psbt_free(psbt));
+    if (!success) {
+        FAIL();
+    }
+    return true;
+}
+
+/* BIP352 reference vector: two P2WPKH inputs paying one recipient */
+static const uint8_t SP_VECTOR_SECKEYS[2][EC_PRIVATE_KEY_LEN]
+    = { { 0xea, 0xdc, 0x78, 0x16, 0x5f, 0xf1, 0xf8, 0xea, 0x94, 0xad, 0x7c, 0xfd, 0xc5, 0x49, 0x90, 0x73, 0x8a, 0x4c,
+            0x53, 0xf6, 0xe0, 0x50, 0x7b, 0x42, 0x15, 0x42, 0x01, 0xb8, 0xe5, 0xdf, 0xf3, 0xb1 },
+          { 0x93, 0xf5, 0xed, 0x90, 0x7a, 0xd5, 0xb2, 0xbd, 0xbb, 0xdc, 0xb5, 0xd9, 0x11, 0x6e, 0xbc, 0x0a, 0x4e, 0x1f,
+              0x92, 0xf9, 0x10, 0xd5, 0x26, 0x02, 0x37, 0xfa, 0x45, 0xa9, 0x40, 0x8a, 0xad, 0x16 } };
+static const uint8_t SP_VECTOR_SCAN_PUBKEY[EC_PUBLIC_KEY_LEN] = { 0x02, 0x20, 0xbc, 0xfa, 0xc5, 0xb9, 0x9e, 0x04, 0xad,
+    0x1a, 0x06, 0xdd, 0xfb, 0x01, 0x6e, 0xe1, 0x35, 0x82, 0x60, 0x9d, 0x60, 0xb6, 0x29, 0x1e, 0x98, 0xd0, 0x1a, 0x9b,
+    0xc9, 0xa1, 0x6c, 0x96, 0xd4 };
+static const uint8_t SP_VECTOR_SPEND_PUBKEY[EC_PUBLIC_KEY_LEN] = { 0x02, 0x5c, 0xc9, 0x85, 0x6d, 0x6f, 0x83, 0x75,
+    0x35, 0x0e, 0x12, 0x39, 0x78, 0xda, 0xac, 0x20, 0x0c, 0x26, 0x0c, 0xb5, 0xb5, 0xae, 0x83, 0x10, 0x6c, 0xab, 0x90,
+    0x48, 0x4d, 0xcd, 0x8f, 0xcf, 0x36 };
+static const uint8_t SP_VECTOR_SMALLEST_OUTPOINT[SP_OUTPOINT_LEN] = { 0x16, 0x9e, 0x1e, 0x83, 0xe9, 0x30, 0x85, 0x33,
+    0x91, 0xbc, 0x6f, 0x35, 0xf6, 0x05, 0xc6, 0x75, 0x4c, 0xfe, 0xad, 0x57, 0xcf, 0x83, 0x87, 0x63, 0x9d, 0x3b, 0x40,
+    0x96, 0xc5, 0x4f, 0x18, 0xf4, 0x00, 0x00, 0x00, 0x00 };
+static const uint8_t SP_VECTOR_EXPECTED_OUTPUT[EC_XONLY_PUBLIC_KEY_LEN] = { 0x3e, 0x9f, 0xce, 0x73, 0xd4, 0xe7, 0x7a,
+    0x48, 0x09, 0x90, 0x8e, 0x3c, 0x3a, 0x2e, 0x54, 0xee, 0x14, 0x7b, 0x93, 0x12, 0xdc, 0x50, 0x44, 0xa1, 0x93, 0xd1,
+    0xfc, 0x85, 0xde, 0x46, 0xe3, 0xc1 };
+
+/* Exercise the vendored BIP352 sender and BIP374 DLEQ secp256k1 modules that
+ * sp_process_psbt() is built on: derive the reference vector's output, then
+ * prove/verify an ECDH share for the untweaked aggregate of the input keys.
+ * NOTE: the caller holds the sensitive stack for `seckeys` and `aggregate_seckey`.
+ */
+static bool sp_check_crypto_dependencies(
+    const uint8_t seckeys[2][EC_PRIVATE_KEY_LEN], uint8_t aggregate_seckey[EC_PRIVATE_KEY_LEN])
+{
+    const secp256k1_context* const ctx = wally_get_secp_context();
+    const uint8_t* const seckey_ptrs[] = { seckeys[0], seckeys[1] };
+    secp256k1_silentpayments_recipient recipient = { .index = 0 };
+    /* NOTE: not const - sender_create_outputs() may permute this array */
+    const secp256k1_silentpayments_recipient* recipient_ptrs[] = { &recipient };
+    secp256k1_xonly_pubkey output_obj;
+    secp256k1_xonly_pubkey* output_ptrs[] = { &output_obj };
+    uint8_t xonly_output[EC_XONLY_PUBLIC_KEY_LEN];
+
+    if (!ctx || !secp256k1_ec_pubkey_parse(ctx, &recipient.scan_pubkey, SP_VECTOR_SCAN_PUBKEY, EC_PUBLIC_KEY_LEN)
+        || !secp256k1_ec_pubkey_parse(ctx, &recipient.spend_pubkey, SP_VECTOR_SPEND_PUBKEY, EC_PUBLIC_KEY_LEN)) {
+        return false;
+    }
+
+    /* BIP352: the derived output must match the reference vector */
+    if (!secp256k1_silentpayments_sender_create_outputs(
+            ctx, output_ptrs, recipient_ptrs, 1, SP_VECTOR_SMALLEST_OUTPOINT, NULL, 0, seckey_ptrs, 2)
+        || !secp256k1_xonly_pubkey_serialize(ctx, xonly_output, &output_obj)
+        || memcmp(xonly_output, SP_VECTOR_EXPECTED_OUTPUT, sizeof(xonly_output))) {
+        return false;
+    }
+
+    /* BIP375: the ECDH share is a_sum*B_scan, proven against the untweaked a_sum */
+    uint8_t aux_rand[32];
+    uint8_t dleq_proof[64];
+    secp256k1_pubkey share_pubkey = recipient.scan_pubkey;
+    get_random(aux_rand, sizeof(aux_rand));
+    memcpy(aggregate_seckey, seckeys[0], EC_PRIVATE_KEY_LEN);
+    if (!secp256k1_ec_seckey_tweak_add(ctx, aggregate_seckey, seckeys[1])
+        || !secp256k1_ec_pubkey_tweak_mul(ctx, &share_pubkey, aggregate_seckey)
+        || !secp256k1_dleq_prove(ctx, dleq_proof, aggregate_seckey, &recipient.scan_pubkey, aux_rand, NULL)) {
+        return false;
+    }
+
+    /* Verify independently, against an aggregate built from the input pubkeys */
+    secp256k1_pubkey input_pubkeys[2];
+    const secp256k1_pubkey* const input_pubkey_ptrs[] = { &input_pubkeys[0], &input_pubkeys[1] };
+    secp256k1_pubkey aggregate_pubkey;
+    return secp256k1_ec_pubkey_create(ctx, &input_pubkeys[0], seckeys[0])
+        && secp256k1_ec_pubkey_create(ctx, &input_pubkeys[1], seckeys[1])
+        && secp256k1_ec_pubkey_combine(ctx, &aggregate_pubkey, input_pubkey_ptrs, 2)
+        && secp256k1_dleq_verify(ctx, dleq_proof, &aggregate_pubkey, &recipient.scan_pubkey, &share_pubkey, NULL);
+}
+
+static bool test_silentpayments_crypto_dependencies(void)
+{
+    uint8_t seckeys[2][EC_PRIVATE_KEY_LEN];
+    uint8_t aggregate_seckey[EC_PRIVATE_KEY_LEN];
+
+    memcpy(seckeys, SP_VECTOR_SECKEYS, sizeof(seckeys));
+    SENSITIVE_PUSH(seckeys, sizeof(seckeys));
+    SENSITIVE_PUSH(aggregate_seckey, sizeof(aggregate_seckey));
+    const bool success = sp_check_crypto_dependencies(seckeys, aggregate_seckey);
+    SENSITIVE_POP(aggregate_seckey);
+    SENSITIVE_POP(seckeys);
+
+    if (!success) {
+        FAIL();
+    }
     return true;
 }
 
@@ -1571,6 +1755,15 @@ bool debug_selfcheck(jade_process_t* process)
     JADE_ASSERT(process);
 
     if (!test_bech32m_encoding()) {
+        FAIL();
+    }
+    if (!test_silentpayments_eligible_scripts()) {
+        FAIL();
+    }
+    if (!test_silentpayments_smallest_outpoint()) {
+        FAIL();
+    }
+    if (!test_silentpayments_crypto_dependencies()) {
         FAIL();
     }
 
