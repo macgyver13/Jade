@@ -2099,6 +2099,455 @@ def _check_tx_signatures(jadeapi, testcase, rslt):
                           host_entropy, signer_commitment, rawsig, is_schnorr=is_p2tr)
 
 
+def test_set_pinserver(jadeapi):
+    # Update pinserver details - just check the calls do not error
+    # See test_handshake() above for more in-depth test of this functionality
+    with open(PINSERVER_TEST_PUBKEY_FILE, 'rb') as f:
+        pubkey = f.read()
+    rslt = jadeapi.set_pinserver('https://192.168.0.123:8080',
+                                 'http://somelongstringblahblahblah.onion',
+                                 pubkey,
+                                 'testcertalsoshouldreallybeprettylong')
+    assert rslt
+    rslt = jadeapi.reset_pinserver(True, True)
+    assert rslt
+
+
+def test_get_greenaddress_receive_address(jadeapi):
+    for network, subact, branch, ptr, recovxpub, csvblocks, conf, expected in GET_GREENADDRESS_DATA:
+        rslt = jadeapi.get_receive_address(network, subact, branch, ptr, recovery_xpub=recovxpub,
+                                           csv_blocks=csvblocks, confidential=conf)
+        assert rslt == expected
+
+
+def test_get_singlesig_receive_address(jadeapi):
+    for network, variant, conf, path, expected in GET_SINGLE_SIG_ADDR_DATA:
+        rslt = jadeapi.get_receive_address(network, path, variant=variant, confidential=conf)
+        assert rslt == expected
+
+
+def test_get_xpubs(jadeapi):
+    for path, network, expected in GET_XPUB_DATA:
+        rslt = jadeapi.get_xpub(network, path)
+        assert rslt == expected
+
+
+def test_liquid_blinding_keys(jadeapi):
+    # Check Jade's master blinding key is as expected and is consistent with wally
+    seed = wally.bip39_mnemonic_to_seed512(TEST_MNEMONIC, None)
+    master_blinding_key = wally.asset_blinding_key_from_seed(seed)
+    assert EXPECTED_MASTER_BLINDING_KEY == master_blinding_key[32:]  # 2nd half of full 512bits
+
+    # Get Liquid master blinding key - errors if we pass the 'onlyIfSilent'
+    # flag, as would normally block while asking user.
+    try:
+        rslt = jadeapi.get_master_blinding_key(True)
+        assert False, 'Expecting "user declined" error'
+    except JadeError as e:
+        assert e.code == JadeError.USER_CANCELLED
+
+    # These ask the user to confirm which is fine
+    rslt = jadeapi.get_master_blinding_key(False)
+    assert rslt == EXPECTED_MASTER_BLINDING_KEY
+    rslt = jadeapi.get_master_blinding_key()
+    assert rslt == EXPECTED_MASTER_BLINDING_KEY
+
+    # Get Liquid script blinding key
+    rslt = jadeapi.get_blinding_key(TEST_SCRIPT)
+    assert rslt == EXPECTED_BLINDING_KEY
+
+    # Get Liquid shared nonce
+    rslt = jadeapi.get_shared_nonce(TEST_SCRIPT, TEST_THEIR_PK)
+    assert rslt == EXPECTED_SHARED_SECRET
+
+    # Get Liquid shared nonce and public blinding key in one call
+    rslt = jadeapi.get_shared_nonce(TEST_SCRIPT, TEST_THEIR_PK, include_pubkey=True)
+    assert rslt['shared_nonce'] == EXPECTED_SHARED_SECRET
+    assert rslt['blinding_key'] == EXPECTED_BLINDING_KEY
+
+
+def test_liquid_blinded_commitments(jadeapi):
+
+    # Test Jade's values are as expected and are consistent with wally
+    abf = wally.asset_blinding_key_to_abf(EXPECTED_MASTER_BLINDING_KEY, TEST_HASH_PREVOUTS, 3)
+    vbf = wally.asset_blinding_key_to_vbf(EXPECTED_MASTER_BLINDING_KEY, TEST_HASH_PREVOUTS, 3)
+
+    # Get Liquid blinding factor
+    rslt = jadeapi.get_blinding_factor(TEST_HASH_PREVOUTS, 3, 'ASSET')
+    assert rslt == EXPECTED_LIQ_COMMITMENT_1['abf']
+    assert rslt == abf
+
+    rslt = jadeapi.get_blinding_factor(TEST_HASH_PREVOUTS, 3, 'VALUE')
+    assert rslt == EXPECTED_LIQ_COMMITMENT_1['vbf']
+    assert rslt == vbf
+
+    rslt = jadeapi.get_blinding_factor(TEST_HASH_PREVOUTS, 3, 'ASSET_AND_VALUE')
+    assert rslt == EXPECTED_LIQ_COMMITMENT_1['abf'] + EXPECTED_LIQ_COMMITMENT_1['vbf']
+    assert rslt == abf + vbf
+
+    # Get Liquid commitments without custom VBF
+    rslt = jadeapi.get_commitments(TEST_REGTEST_BITCOIN,
+                                   9000000,
+                                   TEST_HASH_PREVOUTS,
+                                   3)
+    assert rslt == EXPECTED_LIQ_COMMITMENT_1
+
+    # Get Liquid commitments with custom VBF
+    rslt = jadeapi.get_commitments(TEST_REGTEST_BITCOIN,
+                                   9000000,
+                                   TEST_HASH_PREVOUTS,
+                                   0,
+                                   EXPECTED_LIQ_COMMITMENT_2['vbf'])
+    assert rslt == EXPECTED_LIQ_COMMITMENT_2
+
+    # This checks that we get the same blinders and commitments as we got
+    # using a ledger.  See also test_data/txn_liquid_ledger_compare.json,
+    # which is the same tx as ledger-signed liquid tx:
+    # 4b4a27e482eff9dbaa52e7bada4cd7115c299c8e6ac8ebbd20e8d923ad2dad00
+    # - and gets the same blinders and the same final signatures.
+
+    ledger_txs = list(_get_test_cases('liquid_txn_ledger_compare.json'))
+    assert len(ledger_txs) == 1
+    ledger_commitments = ledger_txs[0]['input']['trusted_commitments']
+    assert len(ledger_commitments) == 3
+    assert ledger_commitments[2] is None
+
+    # Get the hash-prevout for that transaction
+    txn = wally.tx_from_bytes(ledger_txs[0]['input']['txn'], wally.WALLY_TX_FLAG_USE_ELEMENTS)
+    hash_prevouts = bytes(wally.tx_get_hash_prevouts(txn, 0, 0xffffffff))
+
+    # Sanity check it, since we know what it should be ...
+    assert hash_prevouts == h2b('7e78263a58236ffd160ee5a2c58c18b71637974aa95e1c72070b08208012144f')
+
+    # First output commitments, no custom vbf
+    rslt = jadeapi.get_commitments(ledger_commitments[0]['asset_id'],
+                                   ledger_commitments[0]['value'],
+                                   hash_prevouts,
+                                   0)
+    del ledger_commitments[0]['blinding_key']
+    assert rslt == ledger_commitments[0]
+
+    # Second output commitments, including custom vbf
+    rslt = jadeapi.get_commitments(ledger_commitments[1]['asset_id'],
+                                   ledger_commitments[1]['value'],
+                                   hash_prevouts,
+                                   1,
+                                   ledger_commitments[1]['vbf'],)
+    del ledger_commitments[1]['blinding_key']
+    assert rslt == ledger_commitments[1]
+
+
+def test_sign_psbt(jadeapi, cases, has_psram):
+    for txn_data in _get_test_cases(cases):
+        # Expect PSET test cases to fail for non-PSRAM devices
+        psbt_bin = txn_data['input']['psbt']
+
+        expect_pset_failure = False
+        if not has_psram:
+            # Max message size from main/process.h
+            # 69 bytes of overhead for a sign_psbt request
+            MAX_INPUT_MSG_SIZE = 1024 * 17 + 69
+            if len(psbt_bin) + 69 > MAX_INPUT_MSG_SIZE:
+                logger.warning(f'Skipping {txn_data["filename"]} large PSBT on non-psram device')
+                continue
+            if psbt_bin[2] == ord('e'):
+                expect_pset_failure = True
+                continue
+
+        try:
+            network = txn_data['input']['network']
+            additional_info = txn_data['input'].get('additional_info')
+            rslt = jadeapi.sign_psbt(network, psbt_bin, additional_info)
+        except JadeError as err:
+            if expect_pset_failure:
+                continue  # Trying to parse a PSET on an unsupported device
+            if 'expected_output' in txn_data:
+                # We expected this test to pass
+                assert False, f'FAILED: {err.message}: {txn_data}'
+            # Check expected error
+            assert err.message == txn_data['expected_error'], err.message
+            continue
+
+        # Otherwise, should have worked, check expected output
+        assert 'expected_error' not in txn_data
+        assert rslt == txn_data['expected_output']['psbt'], base64.b64encode(rslt).decode()
+
+        # Optionally test extracted tx
+        expected_txn = txn_data['expected_output'].get('txn')
+        if expected_txn:
+            psbt = wally.psbt_from_bytes(rslt, 0)
+            wally.psbt_finalize(psbt, 0)
+            # Extract finalized inputs where possible (e.g. multisigs may
+            # not be fully signed and thus aren't finalizable)
+            txn = wally.psbt_extract(psbt, wally.WALLY_PSBT_EXTRACT_OPT_FINAL)
+            txn = wally.tx_to_bytes(txn, wally.WALLY_TX_FLAG_USE_WITNESS)
+            assert txn == expected_txn, txn.hex()
+
+
+def _read_compact_size(data, offset):
+    value = data[offset]
+    offset += 1
+    if value < 0xfd:
+        return value, offset
+    size = {0xfd: 2, 0xfe: 4, 0xff: 8}[value]
+    return int.from_bytes(data[offset:offset + size], 'little'), offset + size
+
+
+def _write_compact_size(value):
+    if value < 0xfd:
+        return bytes([value])
+    if value <= 0xffff:
+        return b'\xfd' + value.to_bytes(2, 'little')
+    if value <= 0xffffffff:
+        return b'\xfe' + value.to_bytes(4, 'little')
+    return b'\xff' + value.to_bytes(8, 'little')
+
+
+def _read_psbt_map(data, offset):
+    fields = []
+    while data[offset]:
+        key_len, offset = _read_compact_size(data, offset)
+        key = data[offset:offset + key_len]
+        offset += key_len
+        value_len, offset = _read_compact_size(data, offset)
+        value = data[offset:offset + value_len]
+        offset += value_len
+        fields.append((key, value))
+    return fields, offset + 1
+
+
+def _write_psbt_map(fields):
+    result = bytearray()
+    for key, value in fields:
+        result += _write_compact_size(len(key)) + key
+        result += _write_compact_size(len(value)) + value
+    return bytes(result) + b'\x00'
+
+
+def _parse_psbt_maps(psbt):
+    psbt = bytes(psbt)
+    assert psbt[:5] == b'psbt\xff'
+    offset = 5
+    globals_, offset = _read_psbt_map(psbt, offset)
+    globals_by_key = dict(globals_)
+    num_inputs = int.from_bytes(globals_by_key[b'\x04'], 'little')
+    num_outputs = int.from_bytes(globals_by_key[b'\x05'], 'little')
+    inputs, outputs = [], []
+    for _ in range(num_inputs):
+        fields, offset = _read_psbt_map(psbt, offset)
+        inputs.append(fields)
+    for _ in range(num_outputs):
+        fields, offset = _read_psbt_map(psbt, offset)
+        outputs.append(fields)
+    assert offset == len(psbt)
+    return globals_, inputs, outputs
+
+
+def _serialize_psbt_maps(globals_, inputs, outputs):
+    maps = [globals_, *inputs, *outputs]
+    return b'psbt\xff' + b''.join(_write_psbt_map(fields) for fields in maps)
+
+
+def _check_silent_payment_psbt(psbt, silent_payment_info):
+    globals_, inputs, outputs = _parse_psbt_maps(psbt)
+    globals_by_key = dict(globals_)
+    scan_key = silent_payment_info[:33]
+    assert globals_by_key.get(b'\x06', b'\x00') == b'\x00'
+    assert len(globals_by_key[b'\x07' + scan_key]) == 33
+    assert len(globals_by_key[b'\x08' + scan_key]) == 64
+    assert dict(inputs[0])[b'\x03'] == b'\x01\x00\x00\x00'
+    assert any(key[:1] == b'\x02' for key, _ in inputs[0])
+    assert dict(outputs[0])[b'\x09'] == silent_payment_info
+    script = dict(outputs[0])[b'\x04']
+    assert len(script) == 34 and script[:2] == b'\x51\x20'
+    return script, globals_by_key[b'\x08' + scan_key]
+
+
+def test_silent_payment_sign_psbt(jadeapi):
+    testcase = next(_get_test_cases('psbt_sp_v0.json'))
+    network = testcase['input']['network']
+    psbt = testcase['input']['psbt']
+    silent_payment_info = h2b(testcase['silent_payment_info'])
+
+    first = _check_silent_payment_psbt(jadeapi.sign_psbt(network, psbt), silent_payment_info)
+    second = _check_silent_payment_psbt(jadeapi.sign_psbt(network, psbt), silent_payment_info)
+    assert first[0] == second[0]
+    assert first[1] != second[1]
+
+    globals_, inputs, outputs = _parse_psbt_maps(psbt)
+    inputs[0].append((b'\x03', (2).to_bytes(4, 'little')))
+    try:
+        jadeapi.sign_psbt(network, _serialize_psbt_maps(globals_, inputs, outputs))
+        assert False, 'Non-SIGHASH_ALL silent payment PSBT accepted'
+    except JadeError as err:
+        assert err.message == 'Silent payments require SIGHASH_ALL', err.message
+
+    globals_, inputs, outputs = _parse_psbt_maps(psbt)
+    inputs[0] = [(key, value) for key, value in inputs[0] if key[:1] != b'\x06']
+    try:
+        jadeapi.sign_psbt(network, _serialize_psbt_maps(globals_, inputs, outputs))
+        assert False, 'Silent payment PSBT with a foreign eligible input accepted'
+    except JadeError as err:
+        assert err.message == 'This silent payment implementation requires ownership of all eligible inputs', err.message
+
+    globals_, inputs, outputs = _parse_psbt_maps(psbt)
+    globals_ = [(key, b'\x00' if key == b'\x06' else value) for key, value in globals_]
+    outputs[0].append((b'\x04', b'\x51\x20' + bytes(32)))
+    try:
+        jadeapi.sign_psbt(network, _serialize_psbt_maps(globals_, inputs, outputs))
+        assert False, 'Mismatched silent payment output script accepted'
+    except JadeError as err:
+        expected = 'Failed to derive silent payment outputs, or a proposed script did not match'
+        assert err.message == expected, err.message
+
+
+def test_miniscript_descriptor_registration(jadeapi, pattern):
+    for descriptor_data in _get_test_cases(pattern):
+        # Register the descriptor
+        inputdata = descriptor_data['input']
+
+        rslt = jadeapi.register_descriptor(inputdata['network'],
+                                           inputdata['descriptor_name'],
+                                           inputdata['descriptor'],
+                                           inputdata.get('datavalues'))
+        assert rslt is True
+
+        # Pull the data back, then reload (roundtrip) - should be a no-op
+        roundtrip = jadeapi.get_registered_descriptor(inputdata['descriptor_name'])
+        assert roundtrip is not None
+        assert roundtrip['descriptor'] == inputdata['descriptor']
+        assert roundtrip.get('datavalues') == inputdata.get('datavalues')
+
+        roundtrip['network'] = inputdata['network']  # the only item not roundtripped
+        rslt = jadeapi._jadeRpc('register_descriptor', roundtrip)  # push result structure back
+        assert rslt
+
+        # Check present and correct in 'get_registered_multisigs' also
+        registered_descriptors = jadeapi.get_registered_descriptors()
+        descriptor_desc = registered_descriptors.get(inputdata['descriptor_name'])
+        assert descriptor_desc is not None
+        assert descriptor_desc['descriptor_len'] == len(inputdata['descriptor'])
+        assert descriptor_desc['num_datavalues'] == len(inputdata.get('datavalues', []))
+
+        # This includes 'get receive address' tests ...
+        for addr_test in descriptor_data['address_tests']:
+            rslt = jadeapi.get_receive_address(inputdata['network'],
+                                               addr_test['branch'],
+                                               addr_test['pointer'],
+                                               descriptor_name=inputdata['descriptor_name'])
+            assert rslt == addr_test['expected_address']
+
+        # Check multisig equivalent if provided
+        if 'multisig_equivalent' in inputdata:
+            # Register the multisig equivalent
+            descriptor = inputdata['multisig_equivalent']['descriptor']
+            rslt = jadeapi.register_multisig(inputdata['network'],
+                                             inputdata['descriptor_name'],
+                                             descriptor['variant'],
+                                             descriptor['sorted'],
+                                             descriptor['threshold'],
+                                             descriptor['signers'],
+                                             None)  # blinding key
+            assert rslt is True
+
+            # Check the receive addresses are the same
+            for addr_test in descriptor_data['address_tests']:
+                paths = [[addr_test['branch'], addr_test['pointer']]] * len(descriptor['signers'])
+                rslt = jadeapi.get_receive_address(inputdata['network'],
+                                                   paths,
+                                                   multisig_name=inputdata['descriptor_name'])
+                assert rslt == addr_test['expected_address']
+
+
+def test_descriptor_slip77_network_rules(jadeapi):
+    descriptor_no_slip77 = 'wsh(pkh(@0/<0;1>/*))'
+    descriptor_with_slip77 = 'ct(slip77(@B),wpkh(@0/<0;1>/*))'
+    signer = "[e3ebcc79/48'/1'/0'/2']tpubDDvj9CrVJ9kWXSL2kjtA8v53rZvTmL3HmWPvgD3hiTnD5KZuMkxSUsgGra\
+Z9vavB5JSA3F9s5E4cXuCte5rvBs5N4DjfxYssQk1L82Bq4FE"
+    blinding_key = TEST_MNEMONIC_MASTER_BLINDING_KEY
+
+    if LIQUID_DESCRIPTORS:
+        # Liquid descriptor with SLIP-77 should pass
+        assert jadeapi.register_descriptor(
+            'localtest-liquid', 'liqs77ok', descriptor_with_slip77,
+            {'@B': blinding_key, '@0': signer}) is True
+
+        # Liquid descriptor without SLIP-77 should fail.
+        _test_bad_params(
+            jadeapi.jade,
+            ('liq_s77_miss', 'register_descriptor',
+             {'network': 'localtest-liquid', 'descriptor_name': 'liqnos77',
+              'descriptor': descriptor_no_slip77, 'datavalues': {'@0': signer}}),
+            'must use slip77 blinding for liquid network')
+    else:
+        # Liquid descriptors disabled: reject liquid descriptors up-front
+        _test_bad_params(
+            jadeapi.jade,
+            ('liq_s77_off', 'register_descriptor',
+             {'network': 'localtest-liquid', 'descriptor_name': 'liqoff77',
+              'descriptor': descriptor_with_slip77,
+              'datavalues': {'@B': blinding_key, '@0': signer}}),
+            'not supported on liquid')
+
+    # Non-liquid descriptor with SLIP-77 should fail
+    _test_bad_params(
+        jadeapi.jade,
+        ('btc_s77_bad', 'register_descriptor',
+         {'network': 'testnet', 'descriptor_name': 'btcs77bad',
+          'descriptor': descriptor_with_slip77,
+          'datavalues': {'@B': blinding_key, '@0': signer}}),
+        'Descriptor must not be confidential for bitcoin network')
+
+    # Non-liquid descriptor without SLIP-77 should pass.
+    assert jadeapi.register_descriptor(
+      'testnet', 'btcnos77', descriptor_no_slip77, {'@0': signer}) is True
+
+
+def test_sign_identity(jadeapi):
+
+    ecdh_nist_cptys = list(_get_test_cases('identity_ssh_nist_matches_trezor.json'))
+    if not args.json_filter:
+        assert len(ecdh_nist_cptys) == 1
+    ecdh_nist_cpty = ecdh_nist_cptys[0] if ecdh_nist_cptys else None
+
+    for identity_data in _get_test_cases(SIGN_IDENTITY_TESTS):
+        inputdata = identity_data['input']
+        expected = identity_data['expected_output']
+
+        # Check get-pubkey call for slip-0013 and slip-0017
+        for pubkey_type in ['slip-0013', 'slip-0017']:
+            rslt = jadeapi.get_identity_pubkey(inputdata['identity'],
+                                               inputdata['curve'],
+                                               pubkey_type,
+                                               inputdata['index'])
+            assert rslt == expected[pubkey_type]
+
+        # Sign for an identity using a given curve (slip-0013)
+        rslt = jadeapi.sign_identity(inputdata['identity'],
+                                     inputdata['curve'],
+                                     inputdata['challenge'],
+                                     inputdata['index'])
+        assert rslt['pubkey'] == expected['slip-0013']
+        assert rslt['signature'] == expected['signature']
+
+        # Symmetry test for ecdh 'shared key'
+        # Note the 3rd param is the 'other party public key' (slip-0017)
+        if not ecdh_nist_cpty:
+            continue
+        assert ecdh_nist_cpty['input']['curve'] == inputdata['curve']
+        ecdhA = jadeapi.get_identity_shared_key(inputdata['identity'],
+                                                inputdata['curve'],
+                                                ecdh_nist_cpty['expected_output']['slip-0017'],
+                                                index=inputdata['index'])
+        ecdhB = jadeapi.get_identity_shared_key(ecdh_nist_cpty['input']['identity'],
+                                                ecdh_nist_cpty['input']['curve'],
+                                                expected['slip-0017'],
+                                                index=ecdh_nist_cpty['input']['index'])
+        # Assert symmetry
+        assert ecdhA == expected['ecdh_with_trezor']
+        assert ecdhA == ecdhB
+
+
 def run_api_tests(jadeapi, isble, qemu, authuser=False):
 
     rslt = jadeapi.clean_reset()
@@ -2148,6 +2597,55 @@ def run_api_tests(jadeapi, isble, qemu, authuser=False):
     assert len(startinfo) == NUM_VALUES_VERINFO
     has_psram = startinfo['JADE_FREE_SPIRAM'] > 0
     has_ble = startinfo['JADE_CONFIG'] == 'BLE'
+
+    if not args.json_filter:
+        # Test update pinserver details
+        test_set_pinserver(jadeapi)
+
+    # Test descriptor wallets
+    test_miniscript_descriptor_registration(jadeapi, DESCRIPTOR_REG_TESTS)
+    test_descriptor_slip77_network_rules(jadeapi)
+
+    if not args.json_filter:
+        # Get (receive) green-addresses, get-xpub, and sign-message
+        test_get_greenaddress_receive_address(jadeapi)
+        test_get_xpubs(jadeapi)
+
+    if not args.json_filter:
+        # Test liquid blinding keys/nonce, blinded commitments and sign-tx
+        test_liquid_blinding_keys(jadeapi)
+        test_liquid_blinded_commitments(jadeapi)
+
+    # Sign single sig
+    # Single sig requires a different seed for the tests
+    rslt = jadeapi.set_seed(bytes.fromhex(TEST_SEED_SINGLE_SIG))
+    assert rslt is True
+
+    # Test the descriptor wallets again, using a second signer
+    test_miniscript_descriptor_registration(jadeapi, DESCRIPTOR_REG_SS_TESTS)
+
+    if not args.json_filter:
+        test_get_singlesig_receive_address(jadeapi)
+
+    # Push the singlesig test mnemonic for tests which use it
+    rslt = jadeapi.set_mnemonic(TEST_MNEMONIC_SINGLE_SIG)
+    assert rslt is True
+
+    # Test signing singlesig PSBTs (core generated test cases)
+    # FIXME: Add tests for:
+    # - Mixed wallet and non-wallet inputs
+    # - Unusual input and change paths
+    # - Negative test cases (invalid PSBTs)
+    test_sign_psbt(jadeapi, SIGN_PSBT_SS_TESTS, has_psram)
+    test_silent_payment_sign_psbt(jadeapi)
+    # Singlesig Liquid (PSET) tests
+    test_sign_psbt(jadeapi, SIGN_PSET_SS_TESTS, has_psram)
+
+    # Sign identity (ssh & gpg) tests require a specific mnemonic
+    rslt = jadeapi.set_mnemonic(TEST_MNEMONIC_12_IDENTITY)
+    assert rslt is True
+
+    test_sign_identity(jadeapi)
 
     # restore the mnemonic
     rslt = jadeapi.set_mnemonic(TEST_MNEMONIC)
