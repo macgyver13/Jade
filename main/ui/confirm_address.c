@@ -121,15 +121,16 @@ gui_activity_t* make_display_address_activities(const char* title, const bool sh
     return act;
 }
 
-bool show_confirm_address_activity(const char* address, const bool default_selection)
+bool show_confirm_address_activity_ex(const char* title, const char* address, const bool default_selection)
 {
+    JADE_ASSERT(title);
     JADE_ASSERT(address);
     // warning_msg is optional
 
     const bool show_tick = true;
     gui_activity_t* act_addr2 = NULL;
     gui_activity_t* const act_addr1
-        = make_display_address_activities("Verify Address", show_tick, address, default_selection, &act_addr2);
+        = make_display_address_activities(title, show_tick, address, default_selection, &act_addr2);
 
     gui_activity_t* act = act_addr1;
 
@@ -153,5 +154,10 @@ bool show_confirm_address_activity(const char* address, const bool default_selec
             return true;
         }
     }
+}
+
+bool show_confirm_address_activity(const char* address, const bool default_selection)
+{
+    return show_confirm_address_activity_ex("Verify Address", address, default_selection);
 }
 #endif // AMALGAMATED_BUILD
