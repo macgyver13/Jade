@@ -3148,6 +3148,123 @@ def test_sign_psbt(jadeapi, cases, has_psram):
             assert txn == expected_txn, txn.hex()
 
 
+def _read_compact_size(data, offset):
+    value = data[offset]
+    offset += 1
+    if value < 0xfd:
+        return value, offset
+    size = {0xfd: 2, 0xfe: 4, 0xff: 8}[value]
+    return int.from_bytes(data[offset:offset + size], 'little'), offset + size
+
+
+def _write_compact_size(value):
+    if value < 0xfd:
+        return bytes([value])
+    if value <= 0xffff:
+        return b'\xfd' + value.to_bytes(2, 'little')
+    if value <= 0xffffffff:
+        return b'\xfe' + value.to_bytes(4, 'little')
+    return b'\xff' + value.to_bytes(8, 'little')
+
+
+def _read_psbt_map(data, offset):
+    fields = []
+    while data[offset]:
+        key_len, offset = _read_compact_size(data, offset)
+        key = data[offset:offset + key_len]
+        offset += key_len
+        value_len, offset = _read_compact_size(data, offset)
+        value = data[offset:offset + value_len]
+        offset += value_len
+        fields.append((key, value))
+    return fields, offset + 1
+
+
+def _write_psbt_map(fields):
+    result = bytearray()
+    for key, value in fields:
+        result += _write_compact_size(len(key)) + key
+        result += _write_compact_size(len(value)) + value
+    return bytes(result) + b'\x00'
+
+
+def _parse_psbt_maps(psbt):
+    psbt = bytes(psbt)
+    assert psbt[:5] == b'psbt\xff'
+    offset = 5
+    globals_, offset = _read_psbt_map(psbt, offset)
+    globals_by_key = dict(globals_)
+    num_inputs = int.from_bytes(globals_by_key[b'\x04'], 'little')
+    num_outputs = int.from_bytes(globals_by_key[b'\x05'], 'little')
+    inputs, outputs = [], []
+    for _ in range(num_inputs):
+        fields, offset = _read_psbt_map(psbt, offset)
+        inputs.append(fields)
+    for _ in range(num_outputs):
+        fields, offset = _read_psbt_map(psbt, offset)
+        outputs.append(fields)
+    assert offset == len(psbt)
+    return globals_, inputs, outputs
+
+
+def _serialize_psbt_maps(globals_, inputs, outputs):
+    maps = [globals_, *inputs, *outputs]
+    return b'psbt\xff' + b''.join(_write_psbt_map(fields) for fields in maps)
+
+
+def _check_silent_payment_psbt(psbt, silent_payment_info):
+    globals_, inputs, outputs = _parse_psbt_maps(psbt)
+    globals_by_key = dict(globals_)
+    scan_key = silent_payment_info[:33]
+    assert globals_by_key.get(b'\x06', b'\x00') == b'\x00'
+    assert len(globals_by_key[b'\x07' + scan_key]) == 33
+    assert len(globals_by_key[b'\x08' + scan_key]) == 64
+    assert dict(inputs[0])[b'\x03'] == b'\x01\x00\x00\x00'
+    assert any(key[:1] == b'\x02' for key, _ in inputs[0])
+    assert dict(outputs[0])[b'\x09'] == silent_payment_info
+    script = dict(outputs[0])[b'\x04']
+    assert len(script) == 34 and script[:2] == b'\x51\x20'
+    return script, globals_by_key[b'\x08' + scan_key]
+
+
+def test_silent_payment_sign_psbt(jadeapi):
+    testcase = next(_get_test_cases('psbt_sp_v0.json'))
+    network = testcase['input']['network']
+    psbt = testcase['input']['psbt']
+    silent_payment_info = h2b(testcase['silent_payment_info'])
+
+    first = _check_silent_payment_psbt(jadeapi.sign_psbt(network, psbt), silent_payment_info)
+    second = _check_silent_payment_psbt(jadeapi.sign_psbt(network, psbt), silent_payment_info)
+    assert first[0] == second[0]
+    assert first[1] != second[1]
+
+    globals_, inputs, outputs = _parse_psbt_maps(psbt)
+    inputs[0].append((b'\x03', (2).to_bytes(4, 'little')))
+    try:
+        jadeapi.sign_psbt(network, _serialize_psbt_maps(globals_, inputs, outputs))
+        assert False, 'Non-SIGHASH_ALL silent payment PSBT accepted'
+    except JadeError as err:
+        assert err.message == 'Silent payments require SIGHASH_ALL', err.message
+
+    globals_, inputs, outputs = _parse_psbt_maps(psbt)
+    inputs[0] = [(key, value) for key, value in inputs[0] if key[:1] != b'\x06']
+    try:
+        jadeapi.sign_psbt(network, _serialize_psbt_maps(globals_, inputs, outputs))
+        assert False, 'Silent payment PSBT with a foreign eligible input accepted'
+    except JadeError as err:
+        assert err.message == 'This silent payment implementation requires ownership of all eligible inputs', err.message
+
+    globals_, inputs, outputs = _parse_psbt_maps(psbt)
+    globals_ = [(key, b'\x00' if key == b'\x06' else value) for key, value in globals_]
+    outputs[0].append((b'\x04', b'\x51\x20' + bytes(32)))
+    try:
+        jadeapi.sign_psbt(network, _serialize_psbt_maps(globals_, inputs, outputs))
+        assert False, 'Mismatched silent payment output script accepted'
+    except JadeError as err:
+        expected = 'Failed to derive silent payment outputs, or a proposed script did not match'
+        assert err.message == expected, err.message
+
+
 # Helper to check a multisig registration
 def _check_multisig_registration(jadeapi, multisig_data):
     # Register the multisig
@@ -3985,6 +4102,7 @@ def run_api_tests(jadeapi, isble, qemu, authuser=False):
     # - Unusual input and change paths
     # - Negative test cases (invalid PSBTs)
     test_sign_psbt(jadeapi, SIGN_PSBT_SS_TESTS, has_psram)
+    test_silent_payment_sign_psbt(jadeapi)
     # Singlesig Liquid (PSET) tests
     test_sign_psbt(jadeapi, SIGN_PSET_SS_TESTS, has_psram)
 
