@@ -948,6 +948,42 @@ bool wallet_build_singlesig_script(const network_t network_id, const script_vari
     return true;
 }
 
+// Helper to generate a singlesig script of the given type with the pubkey given, and
+// compare it to the target script provided.
+// Returns true if the generated script matches the target script.
+bool wallet_verify_singlesig_script_matches(const network_t network_id, const script_variant_t script_variant,
+    const struct ext_key* hdkey, const uint8_t* target_script, const size_t target_script_len)
+{
+    JADE_ASSERT(is_singlesig(script_variant));
+    JADE_ASSERT(hdkey);
+    JADE_ASSERT(target_script);
+
+    // Check expected script length
+    if (script_length_for_variant(script_variant) != target_script_len) {
+        JADE_LOGE("Receive script unexpected size");
+        return false;
+    }
+
+    // Build our script
+    size_t trial_script_len = 0;
+    uint8_t trial_script[WALLY_SCRIPTPUBKEY_P2WSH_LEN]; // Sufficient
+    if (!wallet_build_singlesig_script(
+            network_id, script_variant, hdkey, trial_script, sizeof(trial_script), &trial_script_len)) {
+        // Failed to build script
+        JADE_LOGE("Receive script cannot be constructed");
+        return false;
+    }
+
+    // Compare generated script to that expected/in the txn
+    if (trial_script_len != target_script_len || sodium_memcmp(target_script, trial_script, trial_script_len) != 0) {
+        JADE_LOGW("Receive script failed validation");
+        return false;
+    }
+
+    // Script matches
+    return true;
+}
+
 bool wallet_search_for_singlesig_script(const network_t network_id, const script_variant_t script_variant,
     const struct ext_key* search_root, size_t* index, const size_t search_depth, const uint8_t* script,
     const size_t script_len)
