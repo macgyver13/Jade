@@ -7,6 +7,7 @@
 #include "../multisig.h"
 #include "../process.h"
 #include "../sensitive.h"
+#include "../silentpayments.h"
 #include "../storage.h"
 #include "../ui/sign_tx.h"
 #include "../utils/cbor_rpc.h"
@@ -20,10 +21,13 @@
 
 #include <sodium/utils.h>
 
+#include <wally_core.h>
 #include <wally_map.h>
 #include <wally_psbt.h>
 #include <wally_psbt_members.h>
 #include <wally_script.h>
+
+#include <stdlib.h>
 
 #include "sign_utils.h"
 
@@ -195,42 +199,6 @@ static bool verify_ga_script_matches(const network_t network_id, const struct ex
 
     if (!wallet_build_ga_script_ex(network_id, user_key, recovery_key, csv_blocks, path, path_len, trial_script,
             sizeof(trial_script), &trial_script_len)) {
-        // Failed to build script
-        JADE_LOGE("Receive script cannot be constructed");
-        return false;
-    }
-
-    // Compare generated script to that expected/in the txn
-    if (trial_script_len != target_script_len || sodium_memcmp(target_script, trial_script, trial_script_len) != 0) {
-        JADE_LOGW("Receive script failed validation");
-        return false;
-    }
-
-    // Script matches
-    return true;
-}
-
-// Helper to generate a singlesig script of the given type with the pubkey given, and
-// compare it to the target script provided.
-// Returns true if the generated script matches the target script.
-static bool verify_singlesig_script_matches(const network_t network_id, const script_variant_t script_variant,
-    const struct ext_key* hdkey, const uint8_t* target_script, const size_t target_script_len)
-{
-    JADE_ASSERT(is_singlesig(script_variant));
-    JADE_ASSERT(hdkey);
-    JADE_ASSERT(target_script);
-
-    // Check expected script length
-    if (script_length_for_variant(script_variant) != target_script_len) {
-        JADE_LOGE("Receive script unexpected size");
-        return false;
-    }
-
-    // Build our script
-    size_t trial_script_len = 0;
-    uint8_t trial_script[WALLY_SCRIPTPUBKEY_P2WSH_LEN]; // Sufficient
-    if (!wallet_build_singlesig_script(
-            network_id, script_variant, hdkey, trial_script, sizeof(trial_script), &trial_script_len)) {
         // Failed to build script
         JADE_LOGE("Receive script cannot be constructed");
         return false;
@@ -547,6 +515,26 @@ static bool psbt_update_outputs(const network_t network_id, struct wally_psbt* p
             }
         }
 
+        size_t sp_info_len = 0;
+        if (wally_psbt_get_output_sp_v0_info_len(psbt, index, &sp_info_len) == WALLY_OK && sp_info_len) {
+            uint8_t sp_info[WALLY_SP_V0_INFO_LEN];
+            if (wally_psbt_get_output_sp_v0_info(psbt, index, sp_info, sizeof(sp_info), &written) != WALLY_OK
+                || !sp_encode_address(network_id, sp_info, written, outinfo->sp_address, sizeof(outinfo->sp_address))) {
+                *errmsg = "Failed to encode Silent Payment address";
+                return false;
+            }
+            outinfo->flags |= OUTPUT_FLAG_SILENT_PAYMENT;
+
+            // Silent Payment scripts are not derived from an output keypath, so
+            // they are never flagged as ours/change - the user confirms every one.
+            // TODO: detect change per BIP375, by deriving the scan and spend keys
+            // from the output's two PSBT_OUT_BIP32_DERIVATION entries, applying
+            // any wally_psbt_get_output_sp_v0_label(), and comparing the result
+            // against sp_info. Needs BIP352 receiving key derivation, which this
+            // wallet does not have yet.
+            continue;
+        }
+
         JADE_LOGD("Considering output %u for change", index);
 
         // Initially we assume the output isn't a wallet output or wallet
@@ -598,7 +586,8 @@ static bool psbt_update_outputs(const network_t network_id, struct wally_psbt* p
             }
 
             // Check that we can generate a script that matches the tx
-            if (!verify_singlesig_script_matches(network_id, script_variant, &iter.hdkey, tx_script, tx_script_len)) {
+            if (!wallet_verify_singlesig_script_matches(
+                    network_id, script_variant, &iter.hdkey, tx_script, tx_script_len)) {
                 JADE_LOGW("Receive script failed validation");
                 continue;
             }
@@ -732,6 +721,9 @@ int sign_psbt(jade_process_t* process, CborValue* params, const network_t networ
         return CBOR_RPC_BAD_PARAMETERS;
     }
     const bool for_liquid = is_elements;
+    if (!sp_process_psbt(network_id, psbt, errmsg)) {
+        return CBOR_RPC_BAD_PARAMETERS;
+    }
     // Liquid: Optional ELIP-0101 genesis blockhash can override test network defaults.
     // Defers to params_genesis_hash() for validation (only needed for Lisuid/PSET).
     size_t has_genesis_blockhash = 0;
