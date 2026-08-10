@@ -26,10 +26,11 @@ if (CONFIG_IDF_TARGET_ESP32S3)
     set(usbdir "usbhmsc")
 endif()
 
+set(wallydir "${PROJECT_DIR}/components/libwally-core")
+set(secpdir "${wallydir}/upstream/src/secp256k1/include")
+
 if(CONFIG_AMALGAMATED_BUILD)
-    set(wallydir "${PROJECT_DIR}/components/libwally-core")
     list(APPEND wallydirs "${wallydir}" "${wallydir}/upstream" "${wallydir}/upstream/src" "${wallydir}/upstream/src/ccan")
-    set(secpdir "${wallydir}/upstream/src/secp256k1/include")
 endif()
 
 if(CONFIG_LOG_WIFI)
