@@ -95,6 +95,9 @@ WARN_UNUSED_RESULT bool wallet_build_ga_script(network_t network_id, const char*
     const uint32_t* path, size_t path_len, uint8_t* output, size_t output_len, size_t* written);
 WARN_UNUSED_RESULT bool wallet_build_singlesig_script(network_t network_id, script_variant_t script_variant,
     const struct ext_key* hdkey, uint8_t* output, size_t output_len, size_t* written);
+// Returns true if the singlesig script built for `hdkey` matches `target_script`
+WARN_UNUSED_RESULT bool wallet_verify_singlesig_script_matches(network_t network_id, script_variant_t script_variant,
+    const struct ext_key* hdkey, const uint8_t* target_script, size_t target_script_len);
 WARN_UNUSED_RESULT bool wallet_search_for_singlesig_script(network_t network_id, script_variant_t script_variant,
     const struct ext_key* search_root, uint32_t* index, size_t search_depth, const uint8_t* script, size_t script_len);
 WARN_UNUSED_RESULT bool wallet_build_multisig_script(script_variant_t script_variant, bool sorted, uint8_t threshold,
