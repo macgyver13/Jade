@@ -98,6 +98,8 @@ typedef enum { QR_GUIDE_HIDE, QR_GUIDE_SHOW } qr_guide_type_t;
 #define OUTPUT_FLAG_CHANGE (1 << 3)
 // Output has unblinded asset and value
 #define OUTPUT_FLAG_HAS_UNBLINDED (1 << 4)
+// Output is a BIP375 Silent Payment
+#define OUTPUT_FLAG_SILENT_PAYMENT (1 << 5)
 
 // Progress bar
 typedef struct {
