@@ -11,6 +11,7 @@ idf_component_register(SRCS
                        "upstream/src/secp256k1/src"
                        "upstream/src/secp256k1/include"
                        "upstream/src/secp256k1/src/modules/ecdh"
+                       "upstream/src/secp256k1/src/modules/dleq"
                        "upstream/src/secp256k1/src/modules/ecdsa_adaptor"
                        "upstream/src/secp256k1/src/modules/ecdsa_s2c"
                        "upstream/src/secp256k1/src/modules/extrakeys"
@@ -19,6 +20,7 @@ idf_component_register(SRCS
                        "upstream/src/secp256k1/src/modules/rangeproof"
                        "upstream/src/secp256k1/src/modules/recovery"
                        "upstream/src/secp256k1/src/modules/schnorrsig"
+                       "upstream/src/secp256k1/src/modules/silentpayments"
                        "upstream/src/secp256k1/src/modules/surjection"
                        "upstream/src/secp256k1/src/modules/whitelist"
                        PRIV_REQUIRES mbedtls)
@@ -48,12 +50,14 @@ target_compile_definitions(${COMPONENT_TARGET} PRIVATE "-DHAVE_EXPLICIT_BZERO=1"
 # libsecp flags
 target_compile_definitions(${COMPONENT_TARGET} PRIVATE "-DECMULT_WINDOW_SIZE=8")
 target_compile_definitions(${COMPONENT_TARGET} PRIVATE "-DENABLE_MODULE_ECDH=1")
+target_compile_definitions(${COMPONENT_TARGET} PRIVATE "-DENABLE_MODULE_DLEQ=1")
 target_compile_definitions(${COMPONENT_TARGET} PRIVATE "-DENABLE_MODULE_ECDSA_S2C=1")
 target_compile_definitions(${COMPONENT_TARGET} PRIVATE "-DENABLE_MODULE_EXTRAKEYS=1")
 target_compile_definitions(${COMPONENT_TARGET} PRIVATE "-DENABLE_MODULE_GENERATOR=1")
 target_compile_definitions(${COMPONENT_TARGET} PRIVATE "-DENABLE_MODULE_RANGEPROOF=1")
 target_compile_definitions(${COMPONENT_TARGET} PRIVATE "-DENABLE_MODULE_RECOVERY=1")
 target_compile_definitions(${COMPONENT_TARGET} PRIVATE "-DENABLE_MODULE_SCHNORRSIG=1")
+target_compile_definitions(${COMPONENT_TARGET} PRIVATE "-DENABLE_MODULE_SILENTPAYMENTS=1")
 target_compile_definitions(${COMPONENT_TARGET} PRIVATE "-DENABLE_MODULE_SURJECTIONPROOF=1")
 target_compile_definitions(${COMPONENT_TARGET} PRIVATE "-DENABLE_MODULE_WHITELIST=1")
 target_compile_definitions(${COMPONENT_TARGET} PRIVATE "-DHAVE_BUILTIN_POPCOUNT=1")
