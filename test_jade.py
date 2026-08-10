@@ -2588,6 +2588,521 @@ def test_liquid_blinded_commitments(jadeapi):
     assert rslt == ledger_commitments[1]
 
 
+def test_sign_psbt(jadeapi, cases, has_psram):
+    for txn_data in _get_test_cases(cases):
+        # Expect PSET test cases to fail for non-PSRAM devices
+        psbt_bin = txn_data['input']['psbt']
+
+        expect_pset_failure = False
+        if not has_psram:
+            # Max message size from main/process.h
+            # 69 bytes of overhead for a sign_psbt request
+            MAX_INPUT_MSG_SIZE = 1024 * 17 + 69
+            if len(psbt_bin) + 69 > MAX_INPUT_MSG_SIZE:
+                logger.warning(f'Skipping {txn_data["filename"]} large PSBT on non-psram device')
+                continue
+            if psbt_bin[2] == ord('e'):
+                expect_pset_failure = True
+                continue
+
+        try:
+            network = txn_data['input']['network']
+            additional_info = txn_data['input'].get('additional_info')
+            rslt = jadeapi.sign_psbt(network, psbt_bin, additional_info)
+        except JadeError as err:
+            if expect_pset_failure:
+                continue  # Trying to parse a PSET on an unsupported device
+            if 'expected_output' in txn_data:
+                # We expected this test to pass
+                assert False, f'FAILED: {err.message}: {txn_data}'
+            # Check expected error
+            assert err.message == txn_data['expected_error'], err.message
+            continue
+
+        # Otherwise, should have worked, check expected output
+        assert 'expected_error' not in txn_data
+        assert rslt == txn_data['expected_output']['psbt'], base64.b64encode(rslt).decode()
+
+        # Optionally test extracted tx
+        expected_txn = txn_data['expected_output'].get('txn')
+        if expected_txn:
+            psbt = wally.psbt_from_bytes(rslt, 0)
+            wally.psbt_finalize(psbt, 0)
+            # Extract finalized inputs where possible (e.g. multisigs may
+            # not be fully signed and thus aren't finalizable)
+            txn = wally.psbt_extract(psbt, wally.WALLY_PSBT_EXTRACT_OPT_FINAL)
+            txn = wally.tx_to_bytes(txn, wally.WALLY_TX_FLAG_USE_WITNESS)
+            assert txn == expected_txn, txn.hex()
+
+
+def _read_compact_size(data, offset):
+    value = data[offset]
+    offset += 1
+    if value < 0xfd:
+        return value, offset
+    size = {0xfd: 2, 0xfe: 4, 0xff: 8}[value]
+    return int.from_bytes(data[offset:offset + size], 'little'), offset + size
+
+
+def _write_compact_size(value):
+    if value < 0xfd:
+        return bytes([value])
+    if value <= 0xffff:
+        return b'\xfd' + value.to_bytes(2, 'little')
+    if value <= 0xffffffff:
+        return b'\xfe' + value.to_bytes(4, 'little')
+    return b'\xff' + value.to_bytes(8, 'little')
+
+
+def _read_psbt_map(data, offset):
+    fields = []
+    while data[offset]:
+        key_len, offset = _read_compact_size(data, offset)
+        key = data[offset:offset + key_len]
+        offset += key_len
+        value_len, offset = _read_compact_size(data, offset)
+        value = data[offset:offset + value_len]
+        offset += value_len
+        fields.append((key, value))
+    return fields, offset + 1
+
+
+def _write_psbt_map(fields):
+    result = bytearray()
+    for key, value in fields:
+        result += _write_compact_size(len(key)) + key
+        result += _write_compact_size(len(value)) + value
+    return bytes(result) + b'\x00'
+
+
+def _parse_psbt_maps(psbt):
+    psbt = bytes(psbt)
+    assert psbt[:5] == b'psbt\xff'
+    offset = 5
+    globals_, offset = _read_psbt_map(psbt, offset)
+    globals_by_key = dict(globals_)
+    num_inputs = int.from_bytes(globals_by_key[b'\x04'], 'little')
+    num_outputs = int.from_bytes(globals_by_key[b'\x05'], 'little')
+    inputs, outputs = [], []
+    for _ in range(num_inputs):
+        fields, offset = _read_psbt_map(psbt, offset)
+        inputs.append(fields)
+    for _ in range(num_outputs):
+        fields, offset = _read_psbt_map(psbt, offset)
+        outputs.append(fields)
+    assert offset == len(psbt)
+    return globals_, inputs, outputs
+
+
+def _serialize_psbt_maps(globals_, inputs, outputs):
+    maps = [globals_, *inputs, *outputs]
+    return b'psbt\xff' + b''.join(_write_psbt_map(fields) for fields in maps)
+
+
+def _check_silent_payment_psbt(psbt, silent_payment_info):
+    globals_, inputs, outputs = _parse_psbt_maps(psbt)
+    globals_by_key = dict(globals_)
+    scan_key = silent_payment_info[:33]
+    assert globals_by_key.get(b'\x06', b'\x00') == b'\x00'
+    assert len(globals_by_key[b'\x07' + scan_key]) == 33
+    assert len(globals_by_key[b'\x08' + scan_key]) == 64
+    assert dict(inputs[0])[b'\x03'] == b'\x01\x00\x00\x00'
+    assert any(key[:1] == b'\x02' for key, _ in inputs[0])
+    assert dict(outputs[0])[b'\x09'] == silent_payment_info
+    script = dict(outputs[0])[b'\x04']
+    assert len(script) == 34 and script[:2] == b'\x51\x20'
+    return script, globals_by_key[b'\x08' + scan_key]
+
+
+def test_silent_payment_sign_psbt(jadeapi):
+    testcase = next(_get_test_cases('psbt_sp_v0.json'))
+    network = testcase['input']['network']
+    psbt = testcase['input']['psbt']
+    silent_payment_info = h2b(testcase['silent_payment_info'])
+
+    first = _check_silent_payment_psbt(jadeapi.sign_psbt(network, psbt), silent_payment_info)
+    second = _check_silent_payment_psbt(jadeapi.sign_psbt(network, psbt), silent_payment_info)
+    assert first[0] == second[0]
+    assert first[1] != second[1]
+
+    globals_, inputs, outputs = _parse_psbt_maps(psbt)
+    inputs[0].append((b'\x03', (2).to_bytes(4, 'little')))
+    try:
+        jadeapi.sign_psbt(network, _serialize_psbt_maps(globals_, inputs, outputs))
+        assert False, 'Non-SIGHASH_ALL silent payment PSBT accepted'
+    except JadeError as err:
+        assert err.message == 'Silent payments require SIGHASH_ALL', err.message
+
+    globals_, inputs, outputs = _parse_psbt_maps(psbt)
+    inputs[0] = [(key, value) for key, value in inputs[0] if key[:1] != b'\x06']
+    try:
+        jadeapi.sign_psbt(network, _serialize_psbt_maps(globals_, inputs, outputs))
+        assert False, 'Silent payment PSBT with a foreign eligible input accepted'
+    except JadeError as err:
+        assert err.message == 'This silent payment implementation requires ownership of all eligible inputs', err.message
+
+    globals_, inputs, outputs = _parse_psbt_maps(psbt)
+    globals_ = [(key, b'\x00' if key == b'\x06' else value) for key, value in globals_]
+    outputs[0].append((b'\x04', b'\x51\x20' + bytes(32)))
+    try:
+        jadeapi.sign_psbt(network, _serialize_psbt_maps(globals_, inputs, outputs))
+        assert False, 'Mismatched silent payment output script accepted'
+    except JadeError as err:
+        expected = 'Failed to derive silent payment outputs, or a proposed script did not match'
+        assert err.message == expected, err.message
+
+
+# Helper to check a multisig registration
+def _check_multisig_registration(jadeapi, multisig_data):
+    # Register the multisig
+    inputdata = multisig_data['input']
+    descriptor = inputdata['descriptor']
+    rslt = jadeapi.register_multisig(inputdata['network'],
+                                     inputdata['multisig_name'],
+                                     descriptor['variant'],
+                                     descriptor['sorted'],
+                                     descriptor['threshold'],
+                                     descriptor['signers'],
+                                     master_blinding_key=descriptor.get('master_blinding_key'))
+    assert rslt is True
+
+    # Pull the data back, then reload (roundtrip) - should be a no-op
+    roundtrip = jadeapi.get_registered_multisig(inputdata['multisig_name'])
+    fetched = roundtrip['descriptor']
+    assert fetched['variant'] == descriptor['variant']
+    assert fetched['sorted'] == descriptor['sorted']
+    assert fetched['threshold'] == descriptor['threshold']
+    assert fetched['master_blinding_key'] == descriptor.get('master_blinding_key', b'')
+    assert fetched['signers'] == descriptor['signers']
+
+    roundtrip['network'] = inputdata['network']  # the only item not roundtripped
+    if not fetched['master_blinding_key']:
+        del fetched['master_blinding_key']  # don't send null/empty blinding key
+
+    rslt = jadeapi._jadeRpc('register_multisig', roundtrip)  # push result structure back
+    assert rslt
+
+    # Check present and correct in 'get_registered_multisigs' also
+    registered_multisigs = jadeapi.get_registered_multisigs()
+    multisig_desc = registered_multisigs.get(inputdata['multisig_name'])
+    assert multisig_desc is not None
+    assert multisig_desc['variant'] == descriptor['variant']
+    assert multisig_desc['sorted'] == descriptor['sorted']
+    assert multisig_desc['threshold'] == descriptor['threshold']
+    assert multisig_desc['num_signers'] == len(descriptor['signers'])
+    assert multisig_desc['master_blinding_key'] == descriptor.get('master_blinding_key', b'')
+
+    # This includes 'get receive address' tests ...
+    for addr_test in multisig_data['address_tests']:
+        rslt = jadeapi.get_receive_address(inputdata['network'],
+                                           addr_test['paths'],
+                                           multisig_name=inputdata['multisig_name'])
+        assert rslt == addr_test['expected_address']
+
+    # ... and maybe blinding key tests ...
+    for blinding_test in multisig_data.get('blinding_key_tests', []):
+        rslt = jadeapi.get_blinding_key(blinding_test['script'],
+                                        multisig_name=inputdata['multisig_name'])
+        assert rslt == blinding_test['expected_blinding_key']
+
+        rslt = jadeapi.get_shared_nonce(blinding_test['script'],
+                                        blinding_test['their_pubkey'],
+                                        multisig_name=inputdata['multisig_name'])
+        assert rslt == blinding_test['expected_shared_nonce']
+
+        rslt = jadeapi.get_shared_nonce(blinding_test['script'],
+                                        blinding_test['their_pubkey'],
+                                        include_pubkey=True,
+                                        multisig_name=inputdata['multisig_name'])
+        assert rslt['blinding_key'] == blinding_test['expected_blinding_key']
+        assert rslt['shared_nonce'] == blinding_test['expected_shared_nonce']
+
+    # ... and blinding/commitments tests!
+    for blinding_test in multisig_data.get('commitments_tests', []):
+        for bf_type, rslt_key in [('ASSET', 'abf'), ('VALUE', 'vbf')]:
+            rslt = jadeapi.get_blinding_factor(blinding_test['hash_prevouts'],
+                                               blinding_test['output_index'],
+                                               bf_type,
+                                               multisig_name=inputdata['multisig_name'])
+            assert rslt == blinding_test[rslt_key]
+
+        rslt = jadeapi.get_commitments(blinding_test['asset_id'],
+                                       blinding_test['value'],
+                                       blinding_test['hash_prevouts'],
+                                       blinding_test['output_index'],
+                                       multisig_name=inputdata['multisig_name'])
+        assert rslt['abf'] == blinding_test['abf']
+        assert rslt['vbf'] == blinding_test['vbf']
+        assert rslt['asset_generator'] == blinding_test['asset_generator']
+        assert rslt['value_commitment'] == blinding_test['value_commitment']
+
+
+def test_generic_multisig_registration(jadeapi):
+    # Generic multisig - check register multisig wallets and get receive addresses
+    # Run all of these tests since later test cases rely on them :(
+    for multisig_data in _get_test_cases(MULTI_REG_TESTS, allow_sampling=False):
+        _check_multisig_registration(jadeapi, multisig_data)
+
+    # Ensure the 1of1 is registered at the end - same name will be used to overwrite
+    # any large test cases (eg. nof15) that otherwise consume all the storage space.
+    for multisig_data in _get_test_cases('multisig_reg_1of1.json'):
+        inputdata = multisig_data['input']
+        descriptor = inputdata['descriptor']
+        rslt = jadeapi.register_multisig(inputdata['network'],
+                                         inputdata['multisig_name'],
+                                         descriptor['variant'],
+                                         descriptor['sorted'],
+                                         descriptor['threshold'],
+                                         descriptor['signers'],
+                                         master_blinding_key=descriptor.get('master_blinding_key'))
+        assert rslt
+
+
+def test_generic_multisig_files(jadeapi):
+    # Check these multisig files load ok
+    for multisig_file_test in _get_test_cases(MULTI_REG_FILE_TESTS):
+        expected_result = multisig_file_test['expected_result']
+        multisig_filename = multisig_file_test['input']['multisig_file']
+        with open('./test_data/' + multisig_filename, 'r') as f:
+            multisig_file = f.read()
+
+        rslt = jadeapi.register_multisig_file(multisig_file)
+        assert rslt
+
+        # Pull the data back, then reload (roundtrip) - should be a no-op
+        roundtrip = jadeapi.get_registered_multisig(expected_result['multisig_name'], as_file=True)
+        rslt = jadeapi.register_multisig_file(roundtrip['multisig_file'])
+        assert rslt
+
+        # Check registered as expected
+        fetched = jadeapi.get_registered_multisig(expected_result['multisig_name'])
+        fetched = fetched['descriptor']
+        assert fetched['variant'] == expected_result['variant']
+        assert fetched['sorted'] == expected_result['sorted']
+        assert fetched['threshold'] == expected_result['threshold']
+        assert fetched['master_blinding_key'] == expected_result.get('master_blinding_key', b'')
+        assert len(fetched['signers']) == expected_result['num_signers']
+
+        registered_multisigs = jadeapi.get_registered_multisigs()
+        multisig_desc = registered_multisigs.get(expected_result['multisig_name'])
+        assert multisig_desc is not None
+        assert multisig_desc['sorted'] == expected_result['sorted']
+        assert multisig_desc['variant'] == expected_result['variant']
+        assert multisig_desc['threshold'] == expected_result['threshold']
+        assert multisig_desc['num_signers'] == expected_result['num_signers']
+        assert multisig_desc['master_blinding_key'] == \
+            expected_result.get('master_blinding_key', b'')
+
+    # Check these multisig files *do not* load
+    for multisig_file_test in _get_test_cases(MULTI_REG_BAD_FILE_TESTS):
+        expected_error = multisig_file_test['expected_error']
+        multisig_filename = multisig_file_test['input']['multisig_file']
+        with open('./test_data/' + multisig_filename, 'r') as f:
+            multisig_file = f.read()
+
+        try:
+            jadeapi.register_multisig_file(multisig_file)
+            assert False, 'Expected error: ' + expected_error
+        except JadeError as e:
+            assert e.message == expected_error, 'Expected: ' + expected_error
+
+
+def test_generic_multisig_matches_ga_addresses(jadeapi):
+    # This test checks that the generic multisig wallets 'matches_ga', do...
+    # ie. if I use the standard ga receive-address, I get the same result as
+    # that using 'generic multisig' (as the co-signers are set-up to match green)
+    matching_ga_msigs = list(_get_test_cases('multisig_reg_*matches_ga_*.json'))
+
+    for ga_msig in matching_ga_msigs:
+        inputdata = ga_msig['input']
+        signers = inputdata['descriptor']['signers']
+
+        # Register multisig wallet
+        descriptor = inputdata['descriptor']
+        rslt = jadeapi.register_multisig(inputdata['network'],
+                                         inputdata['multisig_name'],
+                                         descriptor['variant'],
+                                         descriptor['sorted'],
+                                         descriptor['threshold'],
+                                         descriptor['signers'],
+                                         master_blinding_key=descriptor.get('master_blinding_key'))
+        assert rslt is True
+
+        # Check this test looks good - ie. 2of2 or 2of3
+        assert inputdata['descriptor']['threshold'] == 2
+        assert len(signers) == 2 or len(signers) == 3
+        user_signer = signers[1]  # signers[0] is ga-service
+
+        # Handle subaccounts
+        if len(user_signer['derivation']) == 1:
+            subaccount = 0
+            branch = user_signer['derivation'][0]
+        elif len(user_signer['derivation']) == 3:
+            assert user_signer['derivation'][0] == 2147483651  # 3'
+            assert user_signer['derivation'][1] > 2147483648  # subaccount'
+            subaccount = user_signer['derivation'][1] - 2147483648  # unharden
+            branch = user_signer['derivation'][2]
+        else:
+            assert False, 'Unexpected derivation for ga-multisig wallet'
+
+        user_xpub = jadeapi.get_xpub(inputdata['network'], user_signer['derivation'])
+        assert user_xpub == user_signer['xpub']   # checks our xpub entry
+        recovery_xpub = signers[2]['xpub'] if len(signers) == 3 else None
+
+        # Check receive addresses fetched using normal green call matches the
+        # expected results (which are tested as a generic multisig address above)
+        for addr_test in ga_msig['address_tests']:
+            ptr = addr_test['paths'][0][0]
+            # check all signers have same single-entry path (ie. 'ptr')
+            assert all(p == [ptr] for p in addr_test['paths'])
+            rslt = jadeapi.get_receive_address(inputdata['network'], subaccount, branch, ptr,
+                                               recovery_xpub=recovery_xpub)
+            assert rslt == addr_test['expected_address']
+
+        # ... and maybe blinding key tests ...
+        for blinding_test in ga_msig.get('blinding_key_tests', []):
+            rslt = jadeapi.get_blinding_key(blinding_test['script'])
+            assert rslt == blinding_test['expected_blinding_key']
+
+            rslt = jadeapi.get_shared_nonce(blinding_test['script'],
+                                            blinding_test['their_pubkey'])
+            assert rslt == blinding_test['expected_shared_nonce']
+
+            rslt = jadeapi.get_shared_nonce(blinding_test['script'],
+                                            blinding_test['their_pubkey'],
+                                            include_pubkey=True)
+            assert rslt['blinding_key'] == blinding_test['expected_blinding_key']
+            assert rslt['shared_nonce'] == blinding_test['expected_shared_nonce']
+
+        # ... and blinding/commitments tests!
+        for blinding_test in ga_msig.get('commitments_tests', []):
+            for bf_type, rslt_key in [('ASSET', 'abf'), ('VALUE', 'vbf')]:
+                rslt = jadeapi.get_blinding_factor(blinding_test['hash_prevouts'],
+                                                   blinding_test['output_index'],
+                                                   bf_type)
+                assert rslt == blinding_test[rslt_key]
+
+            rslt = jadeapi.get_commitments(blinding_test['asset_id'],
+                                           blinding_test['value'],
+                                           blinding_test['hash_prevouts'],
+                                           blinding_test['output_index'],
+                                           multisig_name=inputdata['multisig_name'])
+            assert rslt['abf'] == blinding_test['abf']
+            assert rslt['vbf'] == blinding_test['vbf']
+            assert rslt['asset_generator'] == blinding_test['asset_generator']
+            assert rslt['value_commitment'] == blinding_test['value_commitment']
+
+
+def test_generic_multisig_matches_ga_signatures(jadeapi):
+    # Sign txns using generic multisig registration - should get same sigs as ga
+    ga_2of2_multisig_data = list(_get_test_cases('multisig_reg_matches_ga_2of2.json'))
+    assert len(ga_2of2_multisig_data) == 1
+    inputdata = ga_2of2_multisig_data[0]['input']
+    descriptor = inputdata['descriptor']
+    rslt = jadeapi.register_multisig(inputdata['network'],
+                                     inputdata['multisig_name'],
+                                     descriptor['variant'],
+                                     descriptor['sorted'],
+                                     descriptor['threshold'],
+                                     descriptor['signers'],
+                                     master_blinding_key=descriptor.get('master_blinding_key'))
+    assert rslt
+
+    ga_2of2_multisig_name = inputdata['multisig_name']
+    MULTISIG_SIGN_TXS = ['txn_2of2_change.json', 'txn_segwit_multi_input.json']
+    ga_2of2_multisig_txns = (list(_get_test_cases(testcase))[0] for testcase in MULTISIG_SIGN_TXS)
+    for ga_msig in ga_2of2_multisig_txns:
+        inputdata = ga_msig['input']
+
+        # Doctor the change paths to include the registered multisig name, but not
+        # the multisig xpub root (ie. to only contain the final 'ptr' part)
+        # (as the subact/branch is part of the multisig registration)
+        for change in inputdata['change'] or []:
+            if change is not None:
+                path = change.pop('path')
+                change['paths'] = [path[-1:]] * 2
+                change['multisig_name'] = ga_2of2_multisig_name
+
+        use_ae_signatures = inputdata.get('use_ae_signatures')
+        use_legacy_flow = not use_ae_signatures and not args.no_legacy_flow
+        rslt = jadeapi.sign_tx(inputdata['network'],
+                               inputdata['txn'],
+                               inputdata.get('inputs'),
+                               inputdata['change'],
+                               use_ae_signatures,
+                               use_legacy_flow)
+
+        # Check returned signatures
+        _check_tx_signatures(jadeapi, ga_msig, rslt)
+
+
+def test_generic_multisig_matches_ga_signatures_liquid(jadeapi):
+    # Sign liquid txns using generic multisig registration - should get same sigs as ga
+    ga_2of2_multisig_data = list(_get_test_cases('multisig_reg_liquid_matches_ga_2of2.json'))
+    assert len(ga_2of2_multisig_data) == 1
+    inputdata = ga_2of2_multisig_data[0]['input']
+    descriptor = inputdata['descriptor']
+    rslt = jadeapi.register_multisig(inputdata['network'],
+                                     inputdata['multisig_name'],
+                                     descriptor['variant'],
+                                     descriptor['sorted'],
+                                     descriptor['threshold'],
+                                     descriptor['signers'],
+                                     master_blinding_key=descriptor.get('master_blinding_key'))
+    assert rslt
+
+    ga_2of2_multisig_name = inputdata['multisig_name']
+    MULTISIG_SIGN_TXS = ['liquid_txn_lowr_nochange.json', 'liquid_txn_noncsv.json']
+    ga_2of2_multisig_txns = (list(_get_test_cases(testcase))[0] for testcase in MULTISIG_SIGN_TXS)
+    for ga_msig in ga_2of2_multisig_txns:
+        inputdata = ga_msig['input']
+
+        # Doctor the change paths to include the registered multisig name, but not
+        # the multisig xpub root (ie. to only contain the final 'ptr' part)
+        # (as the subact/branch is part of the multisig registration)
+        for change in inputdata['change'] or []:
+            if change is not None:
+                path = change.pop('path')
+                change['paths'] = [path[-1:]] * 2
+                change['multisig_name'] = ga_2of2_multisig_name
+
+        rslt = jadeapi.sign_liquid_tx(inputdata['network'],
+                                      inputdata['txn'],
+                                      inputdata.get('inputs'),
+                                      inputdata['trusted_commitments'],
+                                      inputdata['change'],
+                                      inputdata.get('use_ae_signatures'),
+                                      inputdata.get('asset_info'),
+                                      inputdata.get('additional_info'))
+
+        # Check returned signatures
+        _check_tx_signatures(jadeapi, ga_msig, rslt)
+
+
+def test_generic_multisig_ss_signer(jadeapi):
+    # Register multisig wallets again - this checks that a second user from the multisig
+    # gets the same receive-address.  ie. in the tests 'multisig_reg_ss' the 'single sig'
+    # signer is also in the multisig, so we can check it from this signer also.
+    for multisig_data in _get_test_cases(MULTI_REG_SS_TESTS):
+        # Test trying to access the multisig description registered under the
+        # main test mnemonic fails (as must be registered by accessing wallet)
+        inputdata = multisig_data['input']
+        descriptor = inputdata['descriptor']
+        try:
+            for addr_test in multisig_data['address_tests']:
+                rslt = jadeapi.get_receive_address(inputdata['network'],
+                                                   addr_test['paths'],
+                                                   multisig_name=inputdata['multisig_name'])
+                assert False, 'Accessing other wallet multisig should fail'
+        except JadeError as e:
+            assert e.code == JadeError.BAD_PARAMETERS
+            assert e.message == 'Cannot de-serialise multisig wallet data', e.message
+
+        # If we register the same multisig description to this wallet, it should produce
+        # the same addresses as it did previously (for the other signatory)
+        _check_multisig_registration(jadeapi, multisig_data)
+
+
 def test_miniscript_descriptor_registration(jadeapi, pattern):
     for descriptor_data in _get_test_cases(pattern):
         # Register the descriptor
@@ -2813,6 +3328,25 @@ def run_api_tests(jadeapi, isble, qemu, authuser=False):
 
     if not args.json_filter:
         test_get_singlesig_receive_address(jadeapi)
+
+    # Push the singlesig test mnemonic for tests which use it
+    rslt = jadeapi.set_mnemonic(TEST_MNEMONIC_SINGLE_SIG)
+    assert rslt is True
+
+    # Test signing singlesig transactions
+    test_sign_tx(jadeapi, SIGN_TXN_SS_TESTS, has_psram)
+    test_sign_tx(jadeapi, SIGN_TXN_SS_BAD_TESTS, has_psram)
+    test_sign_tx(jadeapi, SIGN_LIQUID_TXN_SS_TESTS, has_psram)
+
+    # Test signing singlesig PSBTs (core generated test cases)
+    # FIXME: Add tests for:
+    # - Mixed wallet and non-wallet inputs
+    # - Unusual input and change paths
+    # - Negative test cases (invalid PSBTs)
+    test_sign_psbt(jadeapi, SIGN_PSBT_SS_TESTS, has_psram)
+    test_silent_payment_sign_psbt(jadeapi)
+    # Singlesig Liquid (PSET) tests
+    test_sign_psbt(jadeapi, SIGN_PSET_SS_TESTS, has_psram)
 
     # Sign identity (ssh & gpg) tests require a specific mnemonic
     rslt = jadeapi.set_mnemonic(TEST_MNEMONIC_12_IDENTITY)
