@@ -88,6 +88,41 @@ static bool test_sp_address_encoding(void)
     return true;
 }
 
+static bool test_silentpayments_descriptor_export(jade_process_t* process)
+{
+    JADE_ASSERT(process);
+
+    /* The bip392 scan descriptor for TEST_MNEMONIC, account 0, on mainnet */
+    static const char EXPECTED[]
+        = "sp([e3ebcc79/352h/0h/0h]spscan1qmx0kcppqwe4me9g3evu2q0pd5et3uesnxsnthdaevdnyw7df8s6syvale64m4p9ap4hmzvt83s"
+          "79jksmrp4y70fr93k8femdzggtc8f395mepn)#3afjkasy";
+
+    keychain_t keydata = { 0 };
+    if (!keychain_derive_from_mnemonic(TEST_MNEMONIC, NULL, &keydata)) {
+        FAIL();
+    }
+    keychain_set(&keydata, process->ctx.source, true);
+
+    char descriptor[SP_DESCRIPTOR_MAX_LEN];
+    if (!sp_build_scan_descriptor(NETWORK_BITCOIN, 0, descriptor, sizeof(descriptor))
+        || strcmp(descriptor, EXPECTED)) {
+        JADE_LOGE("%s\nvs\n%s", descriptor, EXPECTED);
+        FAIL();
+    }
+
+    /* A different account index or network must yield a different descriptor */
+    char other[SP_DESCRIPTOR_MAX_LEN];
+    if (!sp_build_scan_descriptor(NETWORK_BITCOIN, 1, other, sizeof(other)) || !strcmp(other, descriptor)) {
+        FAIL();
+    }
+    if (!sp_build_scan_descriptor(NETWORK_BITCOIN_TESTNET, 0, other, sizeof(other))
+        || !strcmp(other, descriptor)) {
+        FAIL();
+    }
+
+    return true;
+}
+
 // *All* fields are identical
 static bool all_fields_same(const keychain_t* keydata1, const keychain_t* keydata2, const bool strict_seeds)
 {
@@ -947,6 +982,9 @@ bool debug_selfcheck(jade_process_t* process)
     JADE_ASSERT(process);
 
     if (!test_sp_address_encoding()) {
+        FAIL();
+    }
+    if (!test_silentpayments_descriptor_export(process)) {
         FAIL();
     }
 
