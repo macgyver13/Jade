@@ -2331,6 +2331,10 @@ static void handle_settings(const bool startup_menu)
             display_xpub_qr();
             break;
 
+        case BTN_SETTINGS_SP_EXPORT:
+            display_sp_descriptor_qr();
+            break;
+
         case BTN_SETTINGS_BIP85:
             handle_bip85_mnemonic();
             break;
