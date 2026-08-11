@@ -12,6 +12,7 @@
 #include "rsa.h"
 #include "sensitive.h"
 #include "silentpayments.h"
+#include <wally_silentpayments.h>
 #include "storage.h"
 #include "utils/address.h"
 #include "utils/malloc_ext.h"
@@ -110,86 +111,6 @@ static bool test_sp_address_encoding(void)
     return true;
 }
 
-static bool test_silentpayments_eligible_scripts(void)
-{
-    uint8_t nums_internal_key[EC_XONLY_PUBLIC_KEY_LEN];
-    uint8_t regular_internal_key[EC_XONLY_PUBLIC_KEY_LEN] = { 1 };
-    size_t written = 0;
-
-    if (wally_hex_to_bytes("50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0", nums_internal_key,
-            sizeof(nums_internal_key), &written)
-            != WALLY_OK
-        || written != sizeof(nums_internal_key)) {
-        FAIL();
-    }
-
-    /* The BIP352 eligible set: P2PKH, P2WPKH, P2SH-P2WPKH and non-NUMS P2TR */
-    if (!sp_is_eligible_script(WALLY_SCRIPT_TYPE_P2PKH, WALLY_SCRIPT_TYPE_UNKNOWN, NULL, 0)
-        || !sp_is_eligible_script(WALLY_SCRIPT_TYPE_P2WPKH, WALLY_SCRIPT_TYPE_UNKNOWN, NULL, 0)
-        || !sp_is_eligible_script(WALLY_SCRIPT_TYPE_P2SH, WALLY_SCRIPT_TYPE_P2WPKH, NULL, 0)
-        || !sp_is_eligible_script(WALLY_SCRIPT_TYPE_P2TR, WALLY_SCRIPT_TYPE_UNKNOWN, NULL, 0)
-        || !sp_is_eligible_script(WALLY_SCRIPT_TYPE_P2TR, WALLY_SCRIPT_TYPE_UNKNOWN, regular_internal_key,
-            sizeof(regular_internal_key))) {
-        FAIL();
-    }
-    /* P2SH without a P2WPKH redeem script, NUMS taproot, and everything else */
-    if (sp_is_eligible_script(WALLY_SCRIPT_TYPE_P2SH, WALLY_SCRIPT_TYPE_UNKNOWN, NULL, 0)
-        || sp_is_eligible_script(WALLY_SCRIPT_TYPE_P2SH, WALLY_SCRIPT_TYPE_P2WSH, NULL, 0)
-        || sp_is_eligible_script(
-            WALLY_SCRIPT_TYPE_P2TR, WALLY_SCRIPT_TYPE_UNKNOWN, nums_internal_key, sizeof(nums_internal_key))
-        || sp_is_eligible_script(WALLY_SCRIPT_TYPE_P2WSH, WALLY_SCRIPT_TYPE_UNKNOWN, NULL, 0)
-        || sp_is_eligible_script(WALLY_SCRIPT_TYPE_MULTISIG, WALLY_SCRIPT_TYPE_UNKNOWN, NULL, 0)
-        || sp_is_eligible_script(WALLY_SCRIPT_TYPE_UNKNOWN, WALLY_SCRIPT_TYPE_UNKNOWN, NULL, 0)) {
-        FAIL();
-    }
-    return true;
-}
-
-static bool test_silentpayments_smallest_outpoint(void)
-{
-    /* Outpoints ordered by txid then little-endian vout; added out of order */
-    static const struct {
-        uint8_t txhash_first_byte;
-        uint32_t index;
-    } INPUTS[] = { { 2, 0 }, { 1, 0x100 }, { 1, 1 } };
-    /* vout 0x100 serializes as 00 01 00 00, which sorts before vout 1 */
-    static const uint8_t EXPECTED_TAIL[4] = { 0x00, 0x01, 0x00, 0x00 };
-
-    struct wally_psbt* psbt = NULL;
-    if (wally_psbt_init_alloc(WALLY_PSBT_VERSION_2, 3, 0, 0, 0, &psbt) != WALLY_OK) {
-        FAIL();
-    }
-
-    bool success = true;
-    for (size_t i = 0; i < sizeof(INPUTS) / sizeof(INPUTS[0]); ++i) {
-        uint8_t txhash[WALLY_TXHASH_LEN] = { 0 };
-        struct wally_tx_input* tx_input = NULL;
-        txhash[0] = INPUTS[i].txhash_first_byte;
-        if (wally_tx_input_init_alloc(txhash, sizeof(txhash), INPUTS[i].index, 0, NULL, 0, NULL, &tx_input)
-            != WALLY_OK) {
-            success = false;
-            break;
-        }
-        success = wally_psbt_add_tx_input_at(psbt, i, 0, tx_input) == WALLY_OK;
-        JADE_WALLY_VERIFY(wally_tx_input_free(tx_input));
-        if (!success) {
-            break;
-        }
-    }
-
-    if (success) {
-        uint8_t smallest[SP_OUTPOINT_LEN];
-        sp_smallest_outpoint(psbt, smallest);
-        success = smallest[0] == 1 && !memcmp(smallest + WALLY_TXHASH_LEN, EXPECTED_TAIL, sizeof(EXPECTED_TAIL));
-    }
-
-    JADE_WALLY_VERIFY(wally_psbt_free(psbt));
-    if (!success) {
-        FAIL();
-    }
-    return true;
-}
-
 /* BIP352 reference vector: two P2WPKH inputs paying one recipient */
 static const uint8_t SP_VECTOR_SECKEYS[2][EC_PRIVATE_KEY_LEN]
     = { { 0xea, 0xdc, 0x78, 0x16, 0x5f, 0xf1, 0xf8, 0xea, 0x94, 0xad, 0x7c, 0xfd, 0xc5, 0x49, 0x90, 0x73, 0x8a, 0x4c,
@@ -202,7 +123,7 @@ static const uint8_t SP_VECTOR_SCAN_PUBKEY[EC_PUBLIC_KEY_LEN] = { 0x02, 0x20, 0x
 static const uint8_t SP_VECTOR_SPEND_PUBKEY[EC_PUBLIC_KEY_LEN] = { 0x02, 0x5c, 0xc9, 0x85, 0x6d, 0x6f, 0x83, 0x75,
     0x35, 0x0e, 0x12, 0x39, 0x78, 0xda, 0xac, 0x20, 0x0c, 0x26, 0x0c, 0xb5, 0xb5, 0xae, 0x83, 0x10, 0x6c, 0xab, 0x90,
     0x48, 0x4d, 0xcd, 0x8f, 0xcf, 0x36 };
-static const uint8_t SP_VECTOR_SMALLEST_OUTPOINT[SP_OUTPOINT_LEN] = { 0x16, 0x9e, 0x1e, 0x83, 0xe9, 0x30, 0x85, 0x33,
+static const uint8_t SP_VECTOR_SMALLEST_OUTPOINT[WALLY_SP_OUTPOINT_LEN] = { 0x16, 0x9e, 0x1e, 0x83, 0xe9, 0x30, 0x85, 0x33,
     0x91, 0xbc, 0x6f, 0x35, 0xf6, 0x05, 0xc6, 0x75, 0x4c, 0xfe, 0xad, 0x57, 0xcf, 0x83, 0x87, 0x63, 0x9d, 0x3b, 0x40,
     0x96, 0xc5, 0x4f, 0x18, 0xf4, 0x00, 0x00, 0x00, 0x00 };
 static const uint8_t SP_VECTOR_EXPECTED_OUTPUT[EC_XONLY_PUBLIC_KEY_LEN] = { 0x3e, 0x9f, 0xce, 0x73, 0xd4, 0xe7, 0x7a,
@@ -1788,12 +1709,6 @@ bool debug_selfcheck(jade_process_t* process)
     JADE_ASSERT(process);
 
     if (!test_sp_address_encoding()) {
-        FAIL();
-    }
-    if (!test_silentpayments_eligible_scripts()) {
-        FAIL();
-    }
-    if (!test_silentpayments_smallest_outpoint()) {
         FAIL();
     }
     if (!test_silentpayments_crypto_dependencies()) {

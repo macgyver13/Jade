@@ -46,22 +46,4 @@ WARN_UNUSED_RESULT bool sp_encode_address(
 WARN_UNUSED_RESULT bool sp_build_scan_descriptor(
     network_t network_id, uint16_t account_index, char* output, size_t output_len);
 
-/* The remainder are internal to sp_process_psbt(), and are exposed only so that
- * selfcheck can unit test them - getting either wrong sends funds to an output
- * the recipient cannot detect. */
-
-// A BIP352 outpoint is the txid followed by the 4-byte little-endian vout
-#define SP_OUTPOINT_LEN (WALLY_TXHASH_LEN + 4)
-
-/** Return whether a prevout is eligible to contribute to the BIP352 input hash.
- *
- * The eligible set is exactly P2PKH, P2WPKH, P2SH-P2WPKH and non-NUMS P2TR.
- * The script types are those returned by `wally_scriptpubkey_get_type`.
- */
-bool sp_is_eligible_script(size_t script_type, size_t redeem_script_type, const uint8_t* taproot_internal_key,
-    size_t taproot_internal_key_len);
-
-/** Serialize the lexicographically smallest outpoint of the psbt's inputs. */
-void sp_smallest_outpoint(const struct wally_psbt* psbt, uint8_t output[SP_OUTPOINT_LEN]);
-
 #endif /* SILENTPAYMENTS_H_ */
