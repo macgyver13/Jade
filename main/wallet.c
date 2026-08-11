@@ -46,6 +46,7 @@ static const uint32_t BIP48_PURPOSE = BIP32_INITIAL_HARDENED_CHILD + 48;
 static const uint32_t BIP49_PURPOSE = BIP32_INITIAL_HARDENED_CHILD + 49;
 static const uint32_t BIP84_PURPOSE = BIP32_INITIAL_HARDENED_CHILD + 84;
 static const uint32_t BIP86_PURPOSE = BIP32_INITIAL_HARDENED_CHILD + 86;
+static const uint32_t BIP352_PURPOSE = BIP32_INITIAL_HARDENED_CHILD + 352;
 
 // Maximum number of csv blocks allowed in csv scripts
 static const uint32_t MAX_CSV_BLOCKS_ALLOWED = 65535;
@@ -389,6 +390,23 @@ void wallet_get_default_xpub_export_path(
         path[3] = harden(bip48_script_type);
         *written += 1;
     }
+}
+
+// Function to get the bip352 account path used when we are asked to export a
+// silent payment descriptor.  The scan and spend keys are derived beneath this.
+void wallet_get_default_sp_export_path(
+    const network_t network_id, const uint16_t account, uint32_t* path, const size_t path_len, size_t* written)
+{
+    // Silent payments are bitcoin-only
+    JADE_ASSERT(!network_is_liquid(network_id));
+    JADE_ASSERT(path);
+    JADE_ASSERT(path_len >= SP_EXPORT_PATH_LEN);
+    JADE_INIT_OUT_SIZE(written);
+
+    path[0] = BIP352_PURPOSE;
+    path[1] = network_to_type(network_id) == NETWORK_TYPE_TEST ? BIP44_COIN_TEST : BIP44_COIN_BTC;
+    path[2] = harden(account);
+    *written = SP_EXPORT_PATH_LEN;
 }
 
 // Internal helper to get a derived private key - note 'output' should point to a buffer of size EC_PRIVATE_KEY_LEN
