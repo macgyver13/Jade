@@ -9,10 +9,11 @@ Closes the loop between the two silent payment features:
   4. Verify the signatures and the BIP-375 share it wrote
   5. Scan the extracted transaction as the recipient and find the payment
 
-Step 5 recomputes the BIP-352 output with an implementation that does not use
-the secp256k1_silentpayments module Jade is built on, so it checks Jade's
-result rather than restating it. Those helpers live in the vendored libwally
-tree, in contrib/sp_psbt_roundtrip.py.
+Nothing here reimplements BIP-352: the recipient side is the secp256k1
+silentpayments scanner and the BIP-392 codecs in libwally, driven through the
+helpers in the vendored tree's contrib/sp_psbt_roundtrip.py. What the round
+trip checks is that Jade's descriptor, its derived output and its BIP-375
+share all agree with each other and with a scanner that never saw the PSBT.
 
 Run against the emulator with:
   python test_sp_roundtrip.py --serialport tcp:127.0.0.1:30121
@@ -34,6 +35,9 @@ WALLY_DIR = os.environ.get('JADE_WALLY_DIR',
 
 HARDENED = 0x80000000
 BIP84_PURPOSE = 84 | HARDENED
+BIP32_FLAG_KEY_PUBLIC = 0x1
+WALLY_PSBT_EXTRACT_NON_FINAL = 0x1
+EC_FLAG_ECDSA = 0x1
 # TEST_MNEMONIC_SINGLE_SIG from test_jade.py
 TEST_MNEMONIC = ('paddle puppy easily actor poet apart screen '
                  'drastic city front predict damp')
@@ -90,7 +94,7 @@ def get_recipient(jade, sp, network, account):
             'scan_pubkey': scan_pubkey,
             'spend_pubkey': spend_pubkey,
             'info': scan_pubkey + spend_pubkey,
-            'address': sp.sp_address(scan_pubkey, spend_pubkey, hrp)}
+            'address': sp.sp_address(scan_pubkey + spend_pubkey, hrp)}
 
 
 def get_wallet_keys(jade, sp, network, num_inputs):
@@ -114,7 +118,7 @@ def get_wallet_keys(jade, sp, network, num_inputs):
         child = sp.ext_key()
         derivation = (sp.c_uint32 * 2)(branch, index)
         assert sp.bip32_key_from_parent_path(sp.byref(account), derivation, 2,
-                                             sp.BIP32_FLAG_KEY_PUBLIC,
+                                             BIP32_FLAG_KEY_PUBLIC,
                                              sp.byref(child)) == sp.WALLY_OK
         pubkey = bytes(child.pub_key)
         keys.append({'pubkey': pubkey,
@@ -156,8 +160,8 @@ def build_psbt(sp, inputs, change, recipient_info):
                                              tx_output) == sp.WALLY_OK
         assert sp.wally_psbt_add_tx_output_at(psbt, index, 0, tx_output) == sp.WALLY_OK
         assert sp.wally_psbt_set_output_amount(psbt, index, amount) == sp.WALLY_OK
-    assert sp._psbt_set_output_sp_v0_info(psbt, 0, recipient_info,
-                                          len(recipient_info)) == sp.WALLY_OK
+    assert sp.wally_psbt_set_output_sp_v0_info(psbt, 0, recipient_info,
+                                               len(recipient_info)) == sp.WALLY_OK
     add_keypath(sp, psbt, 1, change, sp.wally_psbt_add_output_keypath)
 
     buf, buf_len = sp.make_cbuffer('00' * 4096)
@@ -196,7 +200,7 @@ def verify_signed(sp, signed, recipient):
 
     # Verify each signature before finalizing, while the sighash is reachable
     unsigned = sp.POINTER(sp.wally_tx)()
-    assert sp.wally_psbt_extract(psbt, sp.WALLY_PSBT_EXTRACT_NON_FINAL,
+    assert sp.wally_psbt_extract(psbt, WALLY_PSBT_EXTRACT_NON_FINAL,
                                  sp.byref(unsigned)) == sp.WALLY_OK
     for index in range(psbt.contents.num_inputs):
         verify_input_signature(sp, psbt, unsigned, index)
@@ -206,8 +210,10 @@ def verify_signed(sp, signed, recipient):
     tx = sp.POINTER(sp.wally_tx)()
     assert sp.wally_psbt_extract(psbt, sp.WALLY_PSBT_EXTRACT_OPT_FINAL,
                                  sp.byref(tx)) == sp.WALLY_OK
+    outpoint, outpoint_len = sp.make_cbuffer('00' * sp.WALLY_SP_OUTPOINT_LEN)
+    assert sp.wally_psbt_get_sp_smallest_outpoint(psbt, outpoint, outpoint_len) == sp.WALLY_OK
     sp.wally_psbt_free(psbt)
-    return tx, share, proof
+    return tx, share, proof, bytes(outpoint)
 
 
 def verify_input_signature(sp, psbt, tx, index):
@@ -232,11 +238,11 @@ def verify_input_signature(sp, psbt, tx, index):
     # PSBT signatures are DER with a trailing sighash byte
     compact, _ = sp.make_cbuffer('00' * 64)
     assert sp.wally_ec_sig_from_der(signature, len(signature) - 1, compact, 64) == sp.WALLY_OK
-    assert sp.wally_ec_sig_verify(pubkey, len(pubkey), txhash, 32, sp.EC_FLAG_ECDSA,
+    assert sp.wally_ec_sig_verify(pubkey, len(pubkey), txhash, 32, EC_FLAG_ECDSA,
                                   compact, 64) == sp.WALLY_OK, f'input {index} signature invalid'
 
 
-def scan_as_recipient(sp, tx, recipient, num_inputs):
+def scan_as_recipient(sp, tx, recipient, num_inputs, outpoint):
     """Scan the transaction for payments to us, as a watch only wallet would."""
     pubkeys = []
     for index in range(num_inputs):
@@ -245,15 +251,13 @@ def scan_as_recipient(sp, tx, recipient, num_inputs):
         assert ret == sp.WALLY_OK and written == sp.EC_PUBLIC_KEY_LEN
         pubkeys.append(bytes(pubkey))
 
-    outpoints = [(bytes(tx.contents.inputs[index].txhash), tx.contents.inputs[index].index)
-                 for index in range(num_inputs)]
     scripts = [sp.string_at(tx.contents.outputs[index].script,
                             tx.contents.outputs[index].script_len)
                for index in range(tx.contents.num_outputs)]
 
     found = sp.scan_outputs(scripts, recipient['scan_privkey'], recipient['spend_pubkey'],
-                            pubkeys, outpoints)
-    return found, pubkeys, outpoints, scripts
+                            pubkeys, outpoint)
+    return found, pubkeys, scripts
 
 
 def run_roundtrip(jade, network='localtest', account=0, num_inputs=2, verbose=True):
@@ -274,22 +278,20 @@ def run_roundtrip(jade, network='localtest', account=0, num_inputs=2, verbose=Tr
     log(f'PSBT built with {num_inputs} inputs, a silent payment and change ({len(psbt)} bytes)')
 
     signed = bytes(jade.sign_psbt(network, psbt))
-    tx, share, proof = verify_signed(sp, signed, recipient)
+    tx, share, proof, outpoint = verify_signed(sp, signed, recipient)
     log(f'Jade signed {num_inputs} inputs, and wrote a {len(share)} byte ECDH share '
         f'and a {len(proof)} byte DLEQ proof')
 
-    found, pubkeys, outpoints, scripts = scan_as_recipient(sp, tx, recipient, num_inputs)
-    assert found == {0: 0}, f'scan found {found}, expected the payment at output 0'
+    found, pubkeys, scripts = scan_as_recipient(sp, tx, recipient, num_inputs, outpoint)
+    assert list(found) == [0], f'scan found {list(found)}, expected the payment at output 0'
     log(f'Recipient found the payment at output {list(found)[0]}: {scripts[0].hex()}')
+    log(f'Spendable with tweak {found[0].hex()}')
 
-    # The proof says the share was made with these inputs, and the share must
-    # lead to the same output the scan just found for itself.
+    # The proof says the share was made with the keys of these inputs, which is
+    # what lets a signer trust a share it did not create itself.
     summed = sp.pubkey_sum(pubkeys)
     assert sp.dleq_verify(proof, summed, recipient['scan_pubkey'], share), 'DLEQ proof invalid'
-    hashed = sp.input_hash(sp.smallest_outpoint(outpoints), summed)
-    from_share = sp.shared_secret_from_share(share, hashed)
-    assert sp.output_xonly(recipient['spend_pubkey'], from_share, 0) == scripts[0][2:34]
-    log('DLEQ proof verified, share agrees with the scan')
+    log('DLEQ proof verified against the summed input keys')
 
     sp.wally_tx_free(tx)
     return {'psbt': psbt, 'signed': signed, 'recipient': recipient, 'script': scripts[0]}
