@@ -934,6 +934,30 @@ class JadeAPI:
         params = {'network': network, 'path': path}
         return self._jadeRpc('get_xpub', params)
 
+    def get_silent_payment_descriptor(self, network, account=0):
+        """
+        RPC call to fetch the bip392 silent payment scan descriptor for the given account.
+
+        The descriptor is watch-only - it contains the scan private key, which allows incoming
+        payments to be found, and the spend public key, which does not allow them to be spent.
+
+        Parameters
+        ----------
+        network : str
+            Bitcoin network to which the descriptor applies - eg. 'mainnet', 'testnet', etc.
+            Liquid networks are not supported.
+
+        account : int, optional
+            bip352 account index. Defaults to 0.
+
+        Returns
+        -------
+        str
+            The checksummed sp() descriptor - eg. 'sp([<fingerprint>/352h/0h/0h]spscan1q...)#<csum>'
+        """
+        params = {'network': network, 'account': account}
+        return self._jadeRpc('get_silent_payment_descriptor', params)
+
     def get_registered_multisigs(self):
         """
         RPC call to fetch brief summaries of any multisig wallets registered to this signer.

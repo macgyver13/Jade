@@ -28,4 +28,18 @@ WARN_UNUSED_RESULT bool sp_process_psbt(network_t network_id, struct wally_psbt*
 WARN_UNUSED_RESULT bool sp_encode_address(
     network_t network_id, const uint8_t* sp_v0_info, size_t sp_v0_info_len, char* output, size_t output_len);
 
+/* A BIP392 sp() descriptor: "sp(" + "[" + 8 char fingerprint + the bip352
+ * account path + "]" + the 119 character spscan key + ")#" + 8 char checksum.
+ */
+#define SP_DESCRIPTOR_MAX_LEN 160
+
+/** Build the BIP392 silent payment scan descriptor for the given account.
+ *
+ * The descriptor is watch-only: it carries the scan private key, which allows
+ * incoming payments to be found, and the spend public key, which does not allow
+ * them to be spent.
+ */
+WARN_UNUSED_RESULT bool sp_build_scan_descriptor(
+    network_t network_id, uint16_t account_index, char* output, size_t output_len);
+
 #endif /* SILENTPAYMENTS_H_ */
