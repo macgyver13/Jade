@@ -15,6 +15,7 @@
 #include "process.h"
 #include "qrcode.h"
 #include "sensitive.h"
+#include "silentpayments.h"
 #include "storage.h"
 #include "ui.h"
 #include "utils/address.h"
@@ -405,6 +406,30 @@ void display_xpub_qr(void)
             // Done
             break;
         }
+    }
+}
+
+// Display the bip392 silent payment scan descriptor as a qr code.
+// NOTE: the account index is the one set in the xpub export options.
+void display_sp_descriptor_qr(void)
+{
+    const uint16_t account_index = storage_get_qr_flags() >> ACCOUNT_INDEX_FLAGS_SHIFT;
+
+    // As for the xpub export, the network is deduced from any network restriction
+    const network_t network_id
+        = keychain_get_network_type_restriction() == NETWORK_TYPE_TEST ? NETWORK_BITCOIN_TESTNET : NETWORK_BITCOIN;
+
+    char descriptor[SP_DESCRIPTOR_MAX_LEN];
+    if (!sp_build_scan_descriptor(network_id, account_index, descriptor, sizeof(descriptor))) {
+        JADE_LOGE("Failed to build silent payment descriptor");
+        await_error_2("Unable to export", "silent payment");
+        return;
+    }
+
+    const char* message[] = { "Export", "Silent Payment", "descriptor" };
+    if (!display_bcur_bytes_qr(message, 3, (const uint8_t*)descriptor, strlen(descriptor), "blkstrm.com/xpub")) {
+        JADE_LOGE("Failed to create silent payment descriptor QR code");
+        await_error_2("Unable to export", "silent payment");
     }
 }
 
