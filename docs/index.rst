@@ -992,6 +992,42 @@ get_xpub reply
         "result": "xpub661MyMwAqRbcGJMgtWQnZ6b8Nk1YE4RkR2sAT9ZE3ovUH95wH5UxY1qkg7aRC7MdQD7YMauTncJMMHyWdDmkCeKMMoVwzJoK5DbZHHhinUQ"
     }
 
+.. _get_silent_payment_descriptor_request:
+
+get_silent_payment_descriptor request
+-------------------------------------
+
+Request to fetch the bip392 silent payment scan descriptor for the given bip352 account.
+
+NOTE: the descriptor contains the scan *private* key, which allows incoming payments to be
+found, and the spend *public* key, which does not allow them to be spent.  Liquid networks
+are not supported.
+
+.. code-block:: cbor
+
+    {
+        "id": "405",
+        "method": "get_silent_payment_descriptor",
+        "params": {
+            "network": "mainnet",
+            "account": 0
+        }
+    }
+
+* 'account' is optional, defaulting to 0, and must be less than 65536.
+
+.. _get_silent_payment_descriptor_reply:
+
+get_silent_payment_descriptor reply
+-----------------------------------
+
+.. code-block:: cbor
+
+    {
+        "id": "405",
+        "result": "sp([e3ebcc79/352h/0h/0h]spscan1qq...)#8ymzcm3z"
+    }
+
 .. _get_receive_address_request:
 
 get_receive_address request
