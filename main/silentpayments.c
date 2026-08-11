@@ -5,7 +5,6 @@
 #include "keychain.h"
 #include "random.h"
 #include "sensitive.h"
-#include "utils/bech32m.h"
 #include "utils/malloc_ext.h"
 #include "utils/psbt.h"
 #include "wallet.h"
@@ -128,7 +127,18 @@ bool sp_encode_address(const network_t network_id, const uint8_t* sp_v0_info, co
         return false;
     }
     const char* const hrp = network_to_type(network_id) == NETWORK_TYPE_MAIN ? "sp" : "tsp";
-    return bech32m_encode(hrp, 0, sp_v0_info, sp_v0_info_len, output, output_len);
+    char* address = NULL;
+    if (wally_sp_address_from_bytes(sp_v0_info, sp_v0_info_len, hrp, 0, &address) != WALLY_OK) {
+        return false;
+    }
+    const bool ret = strlen(address) < output_len;
+    if (ret) {
+        strcpy(output, address);
+    } else {
+        output[0] = '\0';
+    }
+    JADE_WALLY_VERIFY(wally_free_string(address));
+    return ret;
 }
 
 // The BIP352 child paths beneath the account node - m/352'/coin'/account'/x'/0
@@ -191,8 +201,8 @@ bool sp_build_scan_descriptor(
 
     {
         const char* const hrp = network_to_type(network_id) == NETWORK_TYPE_MAIN ? "spscan" : "tspscan";
-        char spscan[BECH32M_MAX_BUFFER_LEN];
-        if (!bech32m_encode(hrp, 0, sp_key, sizeof(sp_key), spscan, sizeof(spscan))) {
+        char* spscan = NULL;
+        if (wally_descriptor_sp_key_from_bytes(sp_key, sizeof(sp_key), hrp, &spscan) != WALLY_OK) {
             goto cleanup;
         }
 
@@ -203,6 +213,8 @@ bool sp_build_scan_descriptor(
         }
 
         const int rc = snprintf(output, output_len, "sp([%s/%s]%s)", fingerprint_hex, pathstr, spscan);
+        // The key expression carries the scan private key; wally_free_string wipes it
+        JADE_WALLY_VERIFY(wally_free_string(spscan));
         JADE_ASSERT(rc > 0 && rc < output_len);
 
         // Append the bip380 checksum, as Jade does for other exported descriptors

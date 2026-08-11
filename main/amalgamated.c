@@ -165,7 +165,6 @@ void __wrap_abort(void);
 #include "./usbhmsc/usbmode.c"
 #endif // CONFIG_IDF_TARGET_ESP32S3 && CONFIG_HAS_BATTERY
 #include "./utils/address.c"
-#include "./utils/bech32m.c"
 #include "./utils/cbor_rpc.c"
 #include "./utils/event.c"
 #include "./utils/network.c"

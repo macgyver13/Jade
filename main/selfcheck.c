@@ -13,7 +13,7 @@
 #include "sensitive.h"
 #include "silentpayments.h"
 #include "storage.h"
-#include "utils/bech32m.h"
+#include "utils/address.h"
 #include "utils/malloc_ext.h"
 #include "utils/shake256.h"
 #include "utils/util.h"
@@ -70,7 +70,7 @@ static const size_t MNEMONIC_24_ENTROPY_BLOBLEN = 96;
         }                                                                                                              \
     } while (false)
 
-static bool test_bech32m_encoding(void)
+static bool test_sp_address_encoding(void)
 {
     /* First recipient from the BIP-352 reference vectors. */
     static const char PAYLOAD_HEX[] = "0220bcfac5b99e04ad1a06ddfb016ee13582609d60b6291e98d01a9bc9a16c96d4"
@@ -88,7 +88,7 @@ static bool test_bech32m_encoding(void)
         FAIL();
     }
 
-    char address[BECH32M_MAX_BUFFER_LEN];
+    char address[MAX_ADDRESS_LEN];
     if (!sp_encode_address(NETWORK_BITCOIN, payload, sizeof(payload), address, sizeof(address))
         || strcmp(address, EXPECTED_MAINNET) || strlen(address) != 116) {
         FAIL();
@@ -102,10 +102,8 @@ static bool test_bech32m_encoding(void)
         FAIL();
     }
 
-    /* Reject invalid versions, uppercase HRPs, and undersized output buffers. */
-    if (bech32m_encode("sp", 32, payload, sizeof(payload), address, sizeof(address))
-        || bech32m_encode("SP", 0, payload, sizeof(payload), address, sizeof(address))
-        || bech32m_encode("sp", 0, payload, sizeof(payload), address, 116) || address[0] != '\0') {
+    /* Reject an output buffer too small to hold the encoded address. */
+    if (sp_encode_address(NETWORK_BITCOIN, payload, sizeof(payload), address, 116) || address[0] != '\0') {
         FAIL();
     }
 
@@ -1789,7 +1787,7 @@ bool debug_selfcheck(jade_process_t* process)
 {
     JADE_ASSERT(process);
 
-    if (!test_bech32m_encoding()) {
+    if (!test_sp_address_encoding()) {
         FAIL();
     }
     if (!test_silentpayments_eligible_scripts()) {
