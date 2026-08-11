@@ -16,6 +16,7 @@ import _thread
 
 import wallycore as wally
 from jadepy.jade import JadeAPI, JadeError
+import test_sp_roundtrip
 
 LIQUID_DESCRIPTORS = True
 
@@ -2363,8 +2364,23 @@ def _check_silent_payment_psbt(psbt, silent_payment_info):
     return script, globals_by_key[b'\x08' + scan_key]
 
 
+def test_silent_payment_roundtrip(jadeapi, network='localtest'):
+    """Pay Jade's own silent payment address, then scan for the payment.
+
+    Checks the descriptor export and signing against each other, and the
+    BIP352 output against an implementation that is not the one Jade uses.
+    Skipped unless the vendored libwally has been built for the host.
+    """
+    if not test_sp_roundtrip.load_wally():
+        logger.warning('Skipping silent payment round trip - no libwally host build')
+        return
+    test_sp_roundtrip.run_roundtrip(jadeapi, network, verbose=False)
+
+
 def test_silent_payment_sign_psbt(jadeapi):
-    testcase = next(_get_test_cases('psbt_sp_v0.json'))
+    testcase = next(_get_test_cases('psbt_sp_resolve_sign.json'), None)
+    if testcase is None:
+        return  # Excluded by --json-filter
     network = testcase['input']['network']
     psbt = testcase['input']['psbt']
     silent_payment_info = h2b(testcase['silent_payment_info'])
@@ -2388,7 +2404,8 @@ def test_silent_payment_sign_psbt(jadeapi):
         jadeapi.sign_psbt(network, _serialize_psbt_maps(globals_, inputs, outputs))
         assert False, 'Silent payment PSBT with a foreign eligible input accepted'
     except JadeError as err:
-        assert err.message == 'This silent payment implementation requires ownership of all eligible inputs', err.message
+        expected = 'This silent payment implementation requires ownership of all eligible inputs'
+        assert err.message == expected, err.message
 
     globals_, inputs, outputs = _parse_psbt_maps(psbt)
     globals_ = [(key, b'\x00' if key == b'\x06' else value) for key, value in globals_]
@@ -2638,6 +2655,8 @@ def run_api_tests(jadeapi, isble, qemu, authuser=False):
     # - Negative test cases (invalid PSBTs)
     test_sign_psbt(jadeapi, SIGN_PSBT_SS_TESTS, has_psram)
     test_silent_payment_sign_psbt(jadeapi)
+    if not args.json_filter:
+        test_silent_payment_roundtrip(jadeapi)
     # Singlesig Liquid (PSET) tests
     test_sign_psbt(jadeapi, SIGN_PSET_SS_TESTS, has_psram)
 
