@@ -97,6 +97,7 @@ void __wrap_abort(void);
 #include "./process/get_registered_multisig.c"
 #include "./process/get_registered_multisigs.c"
 #include "./process/get_shared_nonce.c"
+#include "./process/get_silent_payment_descriptor.c"
 #include "./process/get_xpubs.c"
 #include "./process/mnemonic.c"
 #include "./process/ota.c"
