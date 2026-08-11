@@ -124,6 +124,7 @@ void sign_attestation_process(void* process_ptr);
 void register_otp_process(void* process_ptr);
 void get_otp_code_process(void* process_ptr);
 void get_xpubs_process(void* process_ptr);
+void get_silent_payment_descriptor_process(void* process_ptr);
 void get_registered_multisigs_process(void* process_ptr);
 void get_registered_multisig_process(void* process_ptr);
 void register_multisig_process(void* process_ptr);
@@ -559,6 +560,8 @@ static void dispatch_message(jade_process_t* process)
             task_function = get_otp_code_process;
         } else if (IS_METHOD("get_xpub")) {
             task_function = get_xpubs_process;
+        } else if (IS_METHOD("get_silent_payment_descriptor")) {
+            task_function = get_silent_payment_descriptor_process;
         } else if (IS_METHOD("get_registered_multisigs")) {
             task_function = get_registered_multisigs_process;
         } else if (IS_METHOD("get_registered_multisig")) {
@@ -2329,6 +2332,10 @@ static void handle_settings(const bool startup_menu)
 
         case BTN_SETTINGS_XPUB_EXPORT:
             display_xpub_qr();
+            break;
+
+        case BTN_SETTINGS_SP_EXPORT:
+            display_sp_descriptor_qr();
             break;
 
         case BTN_SETTINGS_BIP85:
