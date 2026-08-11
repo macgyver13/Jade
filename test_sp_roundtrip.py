@@ -178,13 +178,12 @@ def add_keypath(sp, psbt, index, key, add_fn):
                   len(key['fingerprint']), path, len(key['path'])) == sp.WALLY_OK
 
 
-def find_global(sp, psbt, field, scan_pubkey):
+def find_global(sp, psbt, field, find_fn, scan_pubkey):
     """Read a BIP-375 global keyed by the recipient's scan pubkey."""
-    fields = getattr(psbt.contents, field)
-    ret, found = sp.wally_map_find(sp.byref(fields), scan_pubkey, len(scan_pubkey))
+    ret, found = find_fn(psbt, scan_pubkey, len(scan_pubkey))
     if ret != sp.WALLY_OK or not found:
         return None
-    item = fields.items[found - 1]  # wally_map_find returns a 1 based index
+    item = getattr(psbt.contents, field).items[found - 1]  # 1 based
     return sp.string_at(item.value, item.value_len)
 
 
@@ -193,8 +192,10 @@ def verify_signed(sp, signed, recipient):
     psbt = sp.POINTER(sp.wally_psbt)()
     assert sp.wally_psbt_from_bytes(signed, len(signed), 0, sp.byref(psbt)) == sp.WALLY_OK
 
-    share = find_global(sp, psbt, 'global_sp_ecdh_shares', recipient['scan_pubkey'])
-    proof = find_global(sp, psbt, 'global_sp_dleq_proofs', recipient['scan_pubkey'])
+    share = find_global(sp, psbt, 'global_sp_ecdh_shares',
+                        sp.wally_psbt_find_global_sp_ecdh_share, recipient['scan_pubkey'])
+    proof = find_global(sp, psbt, 'global_sp_dleq_proofs',
+                        sp.wally_psbt_find_global_sp_dleq_proof, recipient['scan_pubkey'])
     assert share and len(share) == sp.EC_PUBLIC_KEY_LEN, 'no BIP-375 ECDH share'
     assert proof and len(proof) == sp.DLEQ_PROOF_LEN, 'no BIP-375 DLEQ proof'
 
