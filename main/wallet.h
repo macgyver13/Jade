@@ -80,6 +80,12 @@ void wallet_get_bip85_rsa_entropy(size_t key_bits, size_t index, uint8_t* entrop
 
 void wallet_get_default_xpub_export_path(
     script_variant_t variant, uint16_t account, uint32_t* path, size_t path_len, size_t* written);
+
+// bip352 account path - purpose'/cointype'/account'
+#define SP_EXPORT_PATH_LEN 3
+void wallet_get_default_sp_export_path(
+    network_t network_id, uint16_t account, uint32_t* path, size_t path_len, size_t* written);
+
 bool wallet_is_expected_singlesig_path(
     network_t network_id, script_variant_t script_variant, bool is_change, const uint32_t* path, size_t path_len);
 bool wallet_is_expected_multisig_path(size_t cosigner_index, bool is_change, const uint32_t* path, size_t path_len);
