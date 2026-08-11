@@ -28,6 +28,9 @@
 // Display singlesig xpub qr code
 void display_xpub_qr(void);
 
+// Display the bip392 silent payment scan descriptor qr code
+void display_sp_descriptor_qr(void);
+
 // Handle scanning a QR - supports addresses and PSBTs
 void handle_scan_qr(void);
 
