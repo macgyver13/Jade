@@ -323,10 +323,11 @@ gui_activity_t* make_wallet_settings_activity(void)
         { .txt = NULL, .font = GUI_DEFAULT_FONT, .ev_id = GUI_BUTTON_EVENT_NONE } };
 
     btn_data_t menubtns[] = { { .txt = "Export Xpub", .font = GUI_DEFAULT_FONT, .ev_id = BTN_SETTINGS_XPUB_EXPORT },
+        { .txt = "Export SP Descriptor", .font = GUI_DEFAULT_FONT, .ev_id = BTN_SETTINGS_SP_EXPORT },
         { .txt = "Registered Wallets", .font = GUI_DEFAULT_FONT, .ev_id = BTN_SETTINGS_REGISTERED_WALLETS },
         { .txt = "BIP85", .font = GUI_DEFAULT_FONT, .ev_id = BTN_SETTINGS_BIP85 } };
 
-    return make_menu_activity("Wallet", hdrbtns, 2, menubtns, 3);
+    return make_menu_activity("Wallet", hdrbtns, 2, menubtns, 4);
 }
 
 #if defined(CONFIG_IDF_TARGET_ESP32S3) && defined(CONFIG_HAS_BATTERY)
