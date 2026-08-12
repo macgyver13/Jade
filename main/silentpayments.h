@@ -12,15 +12,26 @@
 
 struct wally_psbt;
 
-/** Derive the BIP352 outputs for any PSBT_OUT_SP_V0_INFO outputs in the psbt.
+/** Resolve or check any PSBT_OUT_SP_V0_INFO outputs in the psbt.
  *
- * The derived output scripts and the BIP375 global ECDH shares/DLEQ proofs are
- * written into the psbt, and the inputs signed by this wallet are pinned to
- * SIGHASH_ALL. A no-op returning true if the psbt has no silent payment outputs.
+ * A no-op returning true if the psbt has no silent payment outputs. Otherwise
+ * any BIP375 shares and proofs it already carries must be valid, and then:
  *
- * Only the BIP375 global share is produced, so this wallet must own every
- * eligible input. Collaborative sending, which BIP375 supports via per-input
- * shares and proofs, is not implemented.
+ * - If another signer has resolved the outputs, they are left alone. We are
+ *   the final signer, and need own only the inputs we sign.
+ * - Otherwise the BIP352 outputs are derived here, along with one BIP375
+ *   global ECDH share and DLEQ proof per recipient scan key. That share covers
+ *   the sum of every eligible input, so this wallet must own all of them.
+ *   Contributing per-input shares, which is what BIP375 offers a signer that
+ *   owns only some of them, is not implemented.
+ *
+ * Either way the inputs signed by this wallet are pinned to SIGHASH_ALL and
+ * the psbt's inputs and outputs are marked unmodifiable.
+ *
+ * NOTE: when another signer resolved the outputs, we can check that the shares
+ * and proofs agree with each other but not that the outputs were derived from
+ * them correctly, which needs every eligible input's key. The user confirming
+ * each output's silent payment address is what covers that.
  */
 WARN_UNUSED_RESULT bool sp_process_psbt(network_t network_id, struct wally_psbt* psbt, const char** errmsg);
 

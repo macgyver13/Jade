@@ -193,6 +193,28 @@ bool sp_process_psbt(const network_t network_id, struct wally_psbt* psbt, const 
         return true;
     }
 
+    // Any shares and proofs already present must be sound, whoever wrote them
+    size_t sp_status = WALLY_SP_INVALID;
+    const int status_ret = wally_psbt_get_sp_status(psbt, 0, &sp_status);
+    if (status_ret == WALLY_ERROR) {
+        // An input wally cannot classify, eg. an unknown witness version
+        *errmsg = "Silent payments do not support Segwit versions above 1";
+        return false;
+    }
+    if (status_ret != WALLY_OK || sp_status == WALLY_SP_INVALID) {
+        *errmsg = "Silent payment ECDH shares or DLEQ proofs are invalid";
+        return false;
+    }
+
+    // Another signer may have resolved the outputs already, in which case we
+    // sign what they produced rather than deriving it ourselves. That needs no
+    // private key but our own, so we need not own every eligible input.
+    // NOTE: a complete status means the shares and proofs agree with each
+    // other, not that the outputs were derived from them correctly - checking
+    // that needs every eligible input's key. The user confirming the silent
+    // payment address of each output is what covers this.
+    const bool resolved = sp_status == WALLY_SP_COMPLETE;
+
     // A sender may propose the output scripts; if so ours must agree with
     // them, so record their lengths before wally overwrites them
     size_t* const claimed_lens = JADE_CALLOC(psbt->num_outputs, sizeof(size_t));
@@ -207,7 +229,7 @@ bool sp_process_psbt(const network_t network_id, struct wally_psbt* psbt, const 
     size_t num_seckeys = 0;
     uint8_t entropy[SP_DLEQ_ENTROPY_LEN];
 
-    for (size_t i = 0; i < psbt->num_outputs; ++i) {
+    for (size_t i = 0; !resolved && i < psbt->num_outputs; ++i) {
         size_t info_len = 0;
         if (wally_psbt_get_output_sp_v0_info_len(psbt, i, &info_len) != WALLY_OK || !info_len) {
             continue; // Not a silent payment output, so wally will not touch it
@@ -231,16 +253,12 @@ bool sp_process_psbt(const network_t network_id, struct wally_psbt* psbt, const 
 
         size_t is_eligible = 0;
         const int wret = wally_psbt_get_input_sp_eligible(psbt, i, &is_eligible);
-        if (wret == WALLY_ERROR) {
-            // An input wally cannot classify, eg. an unknown witness version
-            *errmsg = "Silent payments do not support Segwit versions above 1";
-            goto cleanup;
-        }
         if (wret != WALLY_OK) {
+            // WALLY_ERROR is impossible here, having been ruled out above
             *errmsg = "Silent payment input utxo missing";
             goto cleanup;
         }
-        if (!is_eligible) {
+        if (!is_eligible || resolved) {
             owned_inputs[i] = key_iter_input_begin_public(psbt, i, &iter);
             continue;
         }
@@ -251,30 +269,33 @@ bool sp_process_psbt(const network_t network_id, struct wally_psbt* psbt, const 
         owned_inputs[i] = true;
         ++num_seckeys;
     }
-    if (!num_seckeys) {
-        *errmsg = "Silent payment has no eligible inputs";
-        goto cleanup;
-    }
 
-    get_random(entropy, sizeof(entropy));
-    if (wally_psbt_sp_resolve(psbt, seckeys, num_seckeys * EC_PRIVATE_KEY_LEN, entropy, sizeof(entropy), 0)
-        != WALLY_OK) {
-        *errmsg = "Failed to derive silent payment outputs";
-        goto cleanup;
-    }
-
-    for (size_t i = 0; i < psbt->num_outputs; ++i) {
-        uint8_t derived[WALLY_SCRIPTPUBKEY_P2TR_LEN];
-        size_t written = 0;
-        if (!claimed_lens[i]) {
-            continue; // No script was proposed for this output
-        }
-        if (claimed_lens[i] != sizeof(derived)
-            || wally_psbt_get_output_script(psbt, i, derived, sizeof(derived), &written) != WALLY_OK
-            || written != sizeof(derived)
-            || memcmp(claimed_scripts + (i * sizeof(derived)), derived, sizeof(derived))) {
-            *errmsg = "Silent payment output script mismatch";
+    if (!resolved) {
+        if (!num_seckeys) {
+            *errmsg = "Silent payment has no eligible inputs";
             goto cleanup;
+        }
+
+        get_random(entropy, sizeof(entropy));
+        if (wally_psbt_sp_resolve(psbt, seckeys, num_seckeys * EC_PRIVATE_KEY_LEN, entropy, sizeof(entropy), 0)
+            != WALLY_OK) {
+            *errmsg = "Failed to derive silent payment outputs";
+            goto cleanup;
+        }
+
+        for (size_t i = 0; i < psbt->num_outputs; ++i) {
+            uint8_t derived[WALLY_SCRIPTPUBKEY_P2TR_LEN];
+            size_t written = 0;
+            if (!claimed_lens[i]) {
+                continue; // No script was proposed for this output
+            }
+            if (claimed_lens[i] != sizeof(derived)
+                || wally_psbt_get_output_script(psbt, i, derived, sizeof(derived), &written) != WALLY_OK
+                || written != sizeof(derived)
+                || memcmp(claimed_scripts + (i * sizeof(derived)), derived, sizeof(derived))) {
+                *errmsg = "Silent payment output script mismatch";
+                goto cleanup;
+            }
         }
     }
 
