@@ -2,6 +2,7 @@
 #include "silentpayments.h"
 
 #include "jade_wally_verify.h"
+#include "keychain.h"
 #include "random.h"
 #include "sensitive.h"
 #include "utils/malloc_ext.h"
@@ -11,6 +12,7 @@
 #include <wally_address.h>
 #include <wally_core.h>
 #include <wally_crypto.h>
+#include <wally_descriptor.h>
 #include <wally_psbt.h>
 #include <wally_psbt_members.h>
 #include <wally_silentpayments.h>
@@ -41,6 +43,110 @@ bool sp_encode_address(const network_t network_id, const uint8_t* sp_v0_info, co
         output[0] = '\0';
     }
     JADE_WALLY_VERIFY(wally_free_string(address));
+    return ret;
+}
+
+// The BIP352 child paths beneath the account node - m/352'/coin'/account'/x'/0
+#define SP_SCAN_KEY_BRANCH 1
+#define SP_SPEND_KEY_BRANCH 0
+#define SP_KEY_PATH_LEN (SP_EXPORT_PATH_LEN + 2)
+
+// A BIP392 spscan key expression: the scan private key followed by the spend
+// public key, bech32m encoded as silent payments v0.
+#define SP_SCAN_KEY_LEN (EC_PRIVATE_KEY_LEN + EC_PUBLIC_KEY_LEN)
+
+bool sp_build_scan_descriptor(
+    const network_t network_id, const uint16_t account_index, char* output, const size_t output_len)
+{
+    // Silent payments are bitcoin-only
+    JADE_ASSERT(!network_is_liquid(network_id));
+    JADE_ASSERT(output);
+    JADE_ASSERT(output_len >= SP_DESCRIPTOR_MAX_LEN);
+
+    uint32_t path[SP_KEY_PATH_LEN];
+    size_t path_len = 0;
+    wallet_get_default_sp_export_path(network_id, account_index, path, SP_EXPORT_PATH_LEN, &path_len);
+    JADE_ASSERT(path_len == SP_EXPORT_PATH_LEN);
+
+    // The account path is what the descriptor's key origin refers to
+    char pathstr[MAX_PATH_STR_LEN(SP_EXPORT_PATH_LEN)];
+    const bool path_only = true;
+    if (!wallet_bip32_path_as_str(path, path_len, pathstr, sizeof(pathstr), path_only)) {
+        return false;
+    }
+    // bip380 allows either hardened marker, but bip392 and other signers use 'h'
+    for (char* p = pathstr; *p; ++p) {
+        if (*p == '\'') {
+            *p = 'h';
+        }
+    }
+
+    uint8_t fingerprint[BIP32_KEY_FINGERPRINT_LEN];
+    wallet_get_fingerprint(fingerprint, sizeof(fingerprint));
+
+    uint8_t sp_key[SP_SCAN_KEY_LEN];
+    SENSITIVE_PUSH(sp_key, sizeof(sp_key));
+    struct ext_key hdkey;
+    SENSITIVE_PUSH(&hdkey, sizeof(hdkey));
+    bool ret = false;
+
+    path[SP_EXPORT_PATH_LEN] = harden(SP_SCAN_KEY_BRANCH);
+    path[SP_EXPORT_PATH_LEN + 1] = 0;
+    if (!wallet_get_hdkey(path, SP_KEY_PATH_LEN, BIP32_FLAG_KEY_PRIVATE, &hdkey)) {
+        goto cleanup;
+    }
+    // hdkey.priv_key is the private key prefixed with a zero byte
+    memcpy(sp_key, hdkey.priv_key + 1, EC_PRIVATE_KEY_LEN);
+
+    path[SP_EXPORT_PATH_LEN] = harden(SP_SPEND_KEY_BRANCH);
+    if (!wallet_get_hdkey(path, SP_KEY_PATH_LEN, BIP32_FLAG_KEY_PRIVATE, &hdkey)) {
+        goto cleanup;
+    }
+    memcpy(sp_key + EC_PRIVATE_KEY_LEN, hdkey.pub_key, EC_PUBLIC_KEY_LEN);
+
+    {
+        const char* const hrp = network_to_type(network_id) == NETWORK_TYPE_MAIN ? "spscan" : "tspscan";
+        char* spscan = NULL;
+        if (wally_descriptor_sp_key_from_bytes(sp_key, sizeof(sp_key), hrp, &spscan) != WALLY_OK) {
+            goto cleanup;
+        }
+
+        char fingerprint_hex[(BIP32_KEY_FINGERPRINT_LEN * 2) + 1];
+        for (size_t i = 0; i < sizeof(fingerprint); ++i) {
+            const int rc = snprintf(fingerprint_hex + (i * 2), 3, "%02x", fingerprint[i]);
+            JADE_ASSERT(rc == 2);
+        }
+
+        const int rc = snprintf(output, output_len, "sp([%s/%s]%s)", fingerprint_hex, pathstr, spscan);
+        // The key expression carries the scan private key; wally_free_string wipes it
+        JADE_WALLY_VERIFY(wally_free_string(spscan));
+        JADE_ASSERT(rc > 0 && rc < output_len);
+
+        // Append the bip380 checksum, as Jade does for other exported descriptors
+        struct wally_descriptor* d = NULL;
+        if (wally_descriptor_parse(output, NULL, network_id, 0, &d) != WALLY_OK) {
+            goto cleanup;
+        }
+        char* checksum = NULL;
+        const int wret = wally_descriptor_get_checksum(d, 0, &checksum);
+        JADE_WALLY_VERIFY(wally_descriptor_free(d));
+        if (wret != WALLY_OK || !checksum) {
+            goto cleanup;
+        }
+        const size_t descriptor_len = strlen(output);
+        JADE_ASSERT(descriptor_len + 1 + strlen(checksum) < output_len);
+        output[descriptor_len] = '#';
+        strcpy(output + descriptor_len + 1, checksum);
+        JADE_WALLY_VERIFY(wally_free_string(checksum));
+        ret = true;
+    }
+
+cleanup:
+    SENSITIVE_POP(&hdkey);
+    SENSITIVE_POP(sp_key);
+    if (!ret) {
+        output[0] = '\0';
+    }
     return ret;
 }
 
