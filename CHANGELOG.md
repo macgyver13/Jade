@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- Support signing BIP352 silent payments, resolving the outputs and attaching the
+  BIP375 ECDH share and DLEQ proof, or verifying and signing outputs another
+  signer resolved.
+- Support exporting the BIP392 silent payment scan descriptor, as a QR or with
+  the new `get_silent_payment_descriptor` RPC call.
+
+
 ## [1.0.40] - 2026-04-30
 
 ### Added
