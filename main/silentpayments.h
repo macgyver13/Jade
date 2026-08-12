@@ -8,13 +8,9 @@
 #include "jade_assert.h"
 #include "utils/network.h"
 
-#include <wally_crypto.h>
-#include <wally_transaction.h>
+#include <wally_address.h>
 
 struct wally_psbt;
-
-// BIP352 v0 payment info: compressed scan pubkey || compressed spend pubkey
-#define SP_V0_INFO_LEN (EC_PUBLIC_KEY_LEN * 2)
 
 /** Derive the BIP352 outputs for any PSBT_OUT_SP_V0_INFO outputs in the psbt.
  *

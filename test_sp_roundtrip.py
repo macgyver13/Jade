@@ -38,6 +38,7 @@ BIP84_PURPOSE = 84 | HARDENED
 BIP32_FLAG_KEY_PUBLIC = 0x1
 WALLY_PSBT_EXTRACT_NON_FINAL = 0x1
 EC_FLAG_ECDSA = 0x1
+DLEQ_PROOF_LEN = 64
 # TEST_MNEMONIC_SINGLE_SIG from test_jade.py
 TEST_MNEMONIC = ('paddle puppy easily actor poet apart screen '
                  'drastic city front predict damp')
@@ -197,7 +198,7 @@ def verify_signed(sp, signed, recipient):
     proof = find_global(sp, psbt, 'global_sp_dleq_proofs',
                         sp.wally_psbt_find_global_sp_dleq_proof, recipient['scan_pubkey'])
     assert share and len(share) == sp.EC_PUBLIC_KEY_LEN, 'no BIP-375 ECDH share'
-    assert proof and len(proof) == sp.DLEQ_PROOF_LEN, 'no BIP-375 DLEQ proof'
+    assert proof and len(proof) == DLEQ_PROOF_LEN, 'no BIP-375 DLEQ proof'
 
     # Verify each signature before finalizing, while the sighash is reachable
     unsigned = sp.POINTER(sp.wally_tx)()

@@ -24,16 +24,10 @@
 // Entropy for the BIP375 DLEQ proofs, which wally expands per proof
 #define SP_DLEQ_ENTROPY_LEN 32
 
-// An all-zero P2TR script, ie. no script was proposed for an output
-static const uint8_t ZERO_SCRIPT[WALLY_SCRIPTPUBKEY_P2TR_LEN] = { 0 };
-
-// The largest redeem script we need to inspect is a segwit witness program
-#define SP_UNUSED_MAX_REDEEM_SCRIPT_LEN WALLY_SEGWIT_ADDRESS_PUBKEY_MAX_LEN
-
 bool sp_encode_address(const network_t network_id, const uint8_t* sp_v0_info, const size_t sp_v0_info_len,
     char* output, const size_t output_len)
 {
-    if (!sp_v0_info || sp_v0_info_len != SP_V0_INFO_LEN || !output) {
+    if (!sp_v0_info || sp_v0_info_len != WALLY_SP_V0_INFO_LEN || !output) {
         return false;
     }
     const char* const hrp = network_to_type(network_id) == NETWORK_TYPE_MAIN ? "sp" : "tsp";
@@ -199,7 +193,9 @@ bool sp_process_psbt(const network_t network_id, struct wally_psbt* psbt, const 
         return true;
     }
 
-    // Any script already present must match what we derive, so keep a copy
+    // A sender may propose the output scripts; if so ours must agree with
+    // them, so record their lengths before wally overwrites them
+    size_t* const claimed_lens = JADE_CALLOC(psbt->num_outputs, sizeof(size_t));
     uint8_t* const claimed_scripts = JADE_CALLOC(psbt->num_outputs, WALLY_SCRIPTPUBKEY_P2TR_LEN);
     uint8_t* const seckeys = JADE_CALLOC(psbt->num_inputs, EC_PRIVATE_KEY_LEN);
     bool* const owned_inputs = JADE_CALLOC(psbt->num_inputs, sizeof(*owned_inputs));
@@ -212,9 +208,14 @@ bool sp_process_psbt(const network_t network_id, struct wally_psbt* psbt, const 
     uint8_t entropy[SP_DLEQ_ENTROPY_LEN];
 
     for (size_t i = 0; i < psbt->num_outputs; ++i) {
-        size_t script_len = 0;
-        if (wally_psbt_get_output_script_len(psbt, i, &script_len) == WALLY_OK
-            && script_len == WALLY_SCRIPTPUBKEY_P2TR_LEN) {
+        size_t info_len = 0;
+        if (wally_psbt_get_output_sp_v0_info_len(psbt, i, &info_len) != WALLY_OK || !info_len) {
+            continue; // Not a silent payment output, so wally will not touch it
+        }
+        // NOTE: a script of any other length cannot be what we derive, so only
+        // its length is recorded - that alone is enough to reject it
+        if (wally_psbt_get_output_script_len(psbt, i, &claimed_lens[i]) == WALLY_OK
+            && claimed_lens[i] == WALLY_SCRIPTPUBKEY_P2TR_LEN) {
             size_t written = 0;
             JADE_WALLY_VERIFY(wally_psbt_get_output_script(psbt, i,
                 claimed_scripts + (i * WALLY_SCRIPTPUBKEY_P2TR_LEN), WALLY_SCRIPTPUBKEY_P2TR_LEN, &written));
@@ -262,16 +263,16 @@ bool sp_process_psbt(const network_t network_id, struct wally_psbt* psbt, const 
         goto cleanup;
     }
 
-    // The sender may have proposed the outputs; if so ours must agree
     for (size_t i = 0; i < psbt->num_outputs; ++i) {
-        const uint8_t* const claimed = claimed_scripts + (i * WALLY_SCRIPTPUBKEY_P2TR_LEN);
         uint8_t derived[WALLY_SCRIPTPUBKEY_P2TR_LEN];
         size_t written = 0;
-        if (!memcmp(claimed, ZERO_SCRIPT, sizeof(derived))) {
+        if (!claimed_lens[i]) {
             continue; // No script was proposed for this output
         }
-        if (wally_psbt_get_output_script(psbt, i, derived, sizeof(derived), &written) != WALLY_OK
-            || written != sizeof(derived) || memcmp(claimed, derived, sizeof(derived))) {
+        if (claimed_lens[i] != sizeof(derived)
+            || wally_psbt_get_output_script(psbt, i, derived, sizeof(derived), &written) != WALLY_OK
+            || written != sizeof(derived)
+            || memcmp(claimed_scripts + (i * sizeof(derived)), derived, sizeof(derived))) {
             *errmsg = "Silent payment output script mismatch";
             goto cleanup;
         }
@@ -295,6 +296,7 @@ cleanup:
     free(owned_inputs);
     free(seckeys);
     free(claimed_scripts);
+    free(claimed_lens);
     return success;
 }
 #endif /* AMALGAMATED_BUILD */

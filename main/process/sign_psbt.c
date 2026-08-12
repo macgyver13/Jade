@@ -516,7 +516,7 @@ static bool psbt_update_outputs(const network_t network_id, struct wally_psbt* p
 
         size_t sp_info_len = 0;
         if (wally_psbt_get_output_sp_v0_info_len(psbt, index, &sp_info_len) == WALLY_OK && sp_info_len) {
-            uint8_t sp_info[SP_V0_INFO_LEN];
+            uint8_t sp_info[WALLY_SP_V0_INFO_LEN];
             if (wally_psbt_get_output_sp_v0_info(psbt, index, sp_info, sizeof(sp_info), &written) != WALLY_OK
                 || !sp_encode_address(network_id, sp_info, written, outinfo->sp_address, sizeof(outinfo->sp_address))) {
                 *errmsg = "Failed to encode Silent Payment address";
