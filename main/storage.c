@@ -38,6 +38,7 @@ static const char* BRIGHTNESS_FIELD = "brightness";
 static const char* GUI_FLAGS_FIELD = "guiflags";
 static const char* BLE_FLAGS_FIELD = "bleflags";
 static const char* QR_FLAGS_FIELD = "qrflags";
+static const char* SP_FLAGS_FIELD = "spflags";
 
 // Deprecated/removed keys
 static const char* CLICK_EVENT_FIELD = "clickevent";
@@ -683,6 +684,24 @@ uint32_t storage_get_qr_flags(void)
         }
     }
     return flags;
+}
+
+bool storage_set_sp_flags(uint8_t flags)
+{
+    return store_blob(DEFAULT_NAMESPACE, SP_FLAGS_FIELD, &flags, sizeof(flags));
+}
+
+uint8_t storage_get_sp_flags(void)
+{
+    // Debug builds start with collaborative sending on, so that the test suite
+    // can exercise it without having to drive the Settings menu
+#ifdef CONFIG_DEBUG_MODE
+    const uint8_t defaults = SP_COLLABORATIVE;
+#else
+    const uint8_t defaults = 0;
+#endif
+    uint8_t flags = 0;
+    return read_blob_fixed(DEFAULT_NAMESPACE, SP_FLAGS_FIELD, &flags, sizeof(flags)) ? flags : defaults;
 }
 
 bool storage_set_key_flags(uint8_t flags)

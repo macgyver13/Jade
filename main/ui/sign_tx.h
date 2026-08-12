@@ -1,6 +1,7 @@
 #ifndef UI_SIGN_TX_H_
 #define UI_SIGN_TX_H_
 
+#include "../silentpayments.h"
 #include "../ui.h"
 #include "../utils/network.h"
 
@@ -8,6 +9,10 @@ typedef struct _asset_info asset_info_t;
 typedef struct _asset_summary asset_summary_t;
 typedef struct _output_info output_info_t;
 struct wally_tx;
+
+// Confirm contributing this wallet's BIP375 shares to a silent payment it
+// cannot resolve alone. Returns false if the user declines.
+bool show_sp_contribute_activity(const sp_summary_t* summary);
 
 bool show_btc_transaction_outputs_activity(
     network_t network_id, const struct wally_tx* tx, const output_info_t* output_info);

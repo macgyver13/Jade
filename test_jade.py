@@ -2741,6 +2741,16 @@ def test_silent_payment_sign_psbt(jadeapi):
     assert first[0] == second[0]
     assert first[1] != second[1]
 
+    # A psbt whose outputs another signer has resolved is verified and signed
+    # as-is, not derived again. Deriving picks fresh entropy for the proof, as
+    # the two differing proofs above show, so a proof that survives unchanged
+    # is what shows the final signer path was taken.
+    resolved = jadeapi.sign_psbt(network, psbt)
+    before = _check_silent_payment_psbt(resolved, silent_payment_info)
+    after = _check_silent_payment_psbt(jadeapi.sign_psbt(network, resolved),
+                                       silent_payment_info)
+    assert after == before
+
     globals_, inputs, outputs = _parse_psbt_maps(psbt)
     inputs[0].append((b'\x03', (2).to_bytes(4, 'little')))
     try:
@@ -2749,23 +2759,54 @@ def test_silent_payment_sign_psbt(jadeapi):
     except JadeError as err:
         assert err.message == 'Silent payments require SIGHASH_ALL', err.message
 
+    # Stripping the keypath makes the sole eligible input foreign, leaving
+    # Jade with no key to contribute a share with, let alone resolve the
+    # outputs. There is nothing it can usefully do with such a psbt.
     globals_, inputs, outputs = _parse_psbt_maps(psbt)
     inputs[0] = [(key, value) for key, value in inputs[0] if key[:1] != b'\x06']
     try:
         jadeapi.sign_psbt(network, _serialize_psbt_maps(globals_, inputs, outputs))
-        assert False, 'Silent payment PSBT with a foreign eligible input accepted'
+        assert False, 'Silent payment PSBT with only foreign eligible inputs accepted'
     except JadeError as err:
-        expected = 'This silent payment implementation requires ownership of all eligible inputs'
+        expected = "This wallet owns none of the silent payment's eligible inputs"
         assert err.message == expected, err.message
 
+    # A proposed script on a silent payment output must be the one Jade
+    # derives. With a single silent payment output a proposed script makes the
+    # psbt claim to be resolved, so a second unresolved output is needed to
+    # keep Jade on the deriving path and reach the comparison.
+    two_sp = _duplicate_sp_output(psbt)
+    outputs = _parse_psbt_maps(jadeapi.sign_psbt(network, _serialize_psbt_maps(*two_sp)))[2]
+    derived = [dict(output)[b'\x04'] for output in outputs[:2]]
+
+    # A script on a silent payment output makes it resolved, and BIP375
+    # requires resolved outputs to be unmodifiable, so the flags must be
+    # cleared or the psbt does not parse.
+    globals_, inputs, outputs = _duplicate_sp_output(psbt)
+    globals_ = [(key, b'\x00' if key == b'\x06' else value) for key, value in globals_]
+    outputs[0].append((b'\x04', derived[0]))
+    signed = _parse_psbt_maps(jadeapi.sign_psbt(network, _serialize_psbt_maps(globals_, inputs, outputs)))[2]
+    assert [dict(output)[b'\x04'] for output in signed[:2]] == derived
+
+    globals_, inputs, outputs = _duplicate_sp_output(psbt)
+    globals_ = [(key, b'\x00' if key == b'\x06' else value) for key, value in globals_]
+    outputs[0].append((b'\x04', derived[0][:-1] + bytes([derived[0][-1] ^ 1])))
+    try:
+        jadeapi.sign_psbt(network, _serialize_psbt_maps(globals_, inputs, outputs))
+        assert False, 'Silent payment psbt with a mismatching proposed script accepted'
+    except JadeError as err:
+        assert err.message == 'Failed to derive silent payment outputs', err.message
+
+    # An output script on every silent payment output makes the psbt claim to
+    # be resolved, which BIP375 requires ECDH shares to accompany. It has none.
     globals_, inputs, outputs = _parse_psbt_maps(psbt)
     globals_ = [(key, b'\x00' if key == b'\x06' else value) for key, value in globals_]
     outputs[0].append((b'\x04', b'\x51\x20' + bytes(32)))
     try:
         jadeapi.sign_psbt(network, _serialize_psbt_maps(globals_, inputs, outputs))
-        assert False, 'Mismatched silent payment output script accepted'
+        assert False, 'Resolved silent payment output without ECDH shares accepted'
     except JadeError as err:
-        expected = 'Failed to derive silent payment outputs, or a proposed script did not match'
+        expected = 'Silent payment ECDH shares or DLEQ proofs are invalid'
         assert err.message == expected, err.message
 
 
