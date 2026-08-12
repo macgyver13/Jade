@@ -3266,6 +3266,16 @@ def test_silent_payment_sign_psbt(jadeapi):
     assert first[0] == second[0]
     assert first[1] != second[1]
 
+    # A psbt whose outputs another signer has resolved is verified and signed
+    # as-is, not derived again. Deriving picks fresh entropy for the proof, as
+    # the two differing proofs above show, so a proof that survives unchanged
+    # is what shows the final signer path was taken.
+    resolved = jadeapi.sign_psbt(network, psbt)
+    before = _check_silent_payment_psbt(resolved, silent_payment_info)
+    after = _check_silent_payment_psbt(jadeapi.sign_psbt(network, resolved),
+                                       silent_payment_info)
+    assert after == before
+
     globals_, inputs, outputs = _parse_psbt_maps(psbt)
     inputs[0].append((b'\x03', (2).to_bytes(4, 'little')))
     try:
@@ -3304,14 +3314,17 @@ def test_silent_payment_sign_psbt(jadeapi):
     except JadeError as err:
         assert err.message == 'Failed to derive silent payment outputs', err.message
 
+    # An output script on every silent payment output makes the psbt claim to
+    # be resolved, which BIP375 requires ECDH shares to accompany. It has none.
     globals_, inputs, outputs = _parse_psbt_maps(psbt)
     globals_ = [(key, b'\x00' if key == b'\x06' else value) for key, value in globals_]
     outputs[0].append((b'\x04', b'\x51\x20' + bytes(32)))
     try:
         jadeapi.sign_psbt(network, _serialize_psbt_maps(globals_, inputs, outputs))
-        assert False, 'Mismatched silent payment output script accepted'
+        assert False, 'Resolved silent payment output without ECDH shares accepted'
     except JadeError as err:
-        assert err.message == 'Failed to derive silent payment outputs', err.message
+        expected = 'Silent payment ECDH shares or DLEQ proofs are invalid'
+        assert err.message == expected, err.message
 
 
 # Helper to check a multisig registration
