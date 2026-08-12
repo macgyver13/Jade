@@ -5,6 +5,7 @@
 #include "keychain.h"
 #include "random.h"
 #include "sensitive.h"
+#include "storage.h"
 #include "utils/malloc_ext.h"
 #include "utils/psbt.h"
 #include "wallet.h"
@@ -192,6 +193,10 @@ bool sp_validate_spend_key_path(const network_t network_id, const key_iter* iter
 // with wally_psbt_input_set_sp_{ecdh_share,dleq_proof}() for the inputs we do
 // own, verify other signers' proofs for the rest, and defer PSBT_OUT_SCRIPT
 // until every eligible input has a share.
+// Read the private key of an input this wallet owns. Returning false is not
+// necessarily fatal: a signer that owns only some of the eligible inputs can
+// still contribute a per-input share for each one it does own. An input that
+// is ours but cannot be signed says so through errmsg, and that is fatal.
 static bool sp_get_input_key(const network_t network_id, const struct wally_psbt* psbt, const size_t index,
     key_iter* iter, uint8_t* seckey, const char** errmsg)
 {
@@ -220,15 +225,21 @@ static bool sp_get_input_key(const network_t network_id, const struct wally_psbt
         return false;
     }
     JADE_ASSERT(iter->hdkey.priv_key[0] == BIP32_FLAG_KEY_PRIVATE);
+    if (script_variant == P2TR) {
+        // BIP352 uses the key of the taproot output key, so tweak per BIP341
+        // as the signing path does. Silent payments are bitcoin-only, hence
+        // no EC_FLAG_ELEMENTS here.
+        return wally_ec_private_key_bip341_tweak(
+                   iter->hdkey.priv_key + 1, EC_PRIVATE_KEY_LEN, NULL, 0, 0, seckey, EC_PRIVATE_KEY_LEN)
+            == WALLY_OK;
+    }
     memcpy(seckey, iter->hdkey.priv_key + 1, EC_PRIVATE_KEY_LEN);
     return true;
 }
 
-bool sp_process_psbt(const network_t network_id, struct wally_psbt* psbt, const char** errmsg)
+// Count the psbt's silent payment outputs
+static size_t sp_num_outputs(const struct wally_psbt* psbt)
 {
-    JADE_ASSERT(psbt);
-    JADE_ASSERT(errmsg);
-
     size_t num_sp_outputs = 0;
     for (size_t i = 0; i < psbt->num_outputs; ++i) {
         size_t info_len = 0;
@@ -236,82 +247,297 @@ bool sp_process_psbt(const network_t network_id, struct wally_psbt* psbt, const 
             ++num_sp_outputs;
         }
     }
-    if (!num_sp_outputs) {
-        return true;
-    }
+    return num_sp_outputs;
+}
 
-    uint8_t* const seckeys = JADE_CALLOC(psbt->num_inputs, EC_PRIVATE_KEY_LEN);
-    bool* const owned_inputs = JADE_CALLOC(psbt->num_inputs, sizeof(*owned_inputs));
-    key_iter iter;
-    SENSITIVE_PUSH(&iter, sizeof(iter));
-    SENSITIVE_PUSH(seckeys, psbt->num_inputs * EC_PRIVATE_KEY_LEN);
-
-    bool success = false;
-    size_t num_seckeys = 0;
-    uint8_t entropy[SP_DLEQ_ENTROPY_LEN];
-
+// Check the psbt's shares and proofs, whoever wrote them, and that its inputs
+// can be signed at all. Returns false with *errmsg set if not.
+static bool sp_check_psbt(const struct wally_psbt* psbt, size_t* sp_status, const char** errmsg)
+{
     for (size_t i = 0; i < psbt->num_inputs; ++i) {
         const struct wally_psbt_input* const input = &psbt->inputs[i];
         if (input->sighash && input->sighash != WALLY_SIGHASH_ALL) {
             *errmsg = "Silent payments require SIGHASH_ALL";
-            goto cleanup;
+            return false;
         }
+    }
 
-        size_t is_eligible = 0;
-        const int wret = wally_psbt_get_input_sp_eligible(psbt, i, &is_eligible);
-        if (wret == WALLY_ERROR) {
-            // An input wally cannot classify, eg. an unknown witness version
-            *errmsg = "Silent payments do not support Segwit versions above 1";
-            goto cleanup;
-        }
-        if (wret != WALLY_OK) {
-            *errmsg = "Silent payment input utxo missing";
-            goto cleanup;
-        }
-        if (!is_eligible) {
-            owned_inputs[i] = key_iter_input_begin_public(psbt, i, &iter);
+    const int status_ret = wally_psbt_get_sp_status(psbt, 0, sp_status);
+    if (status_ret == WALLY_ERROR) {
+        // An input wally cannot classify, eg. an unknown witness version
+        *errmsg = "Silent payments do not support Segwit versions above 1";
+        return false;
+    }
+    if (status_ret != WALLY_OK || *sp_status == WALLY_SP_INVALID) {
+        *errmsg = "Silent payment ECDH shares or DLEQ proofs are invalid";
+        return false;
+    }
+    return true;
+}
+
+// Whether an eligible input we do not own already carries a share for every
+// recipient scan key, ie. whether another signer has covered it for us. The
+// shares present are known valid, sp_check_psbt() having verified them.
+static bool sp_input_is_covered(const struct wally_psbt* psbt, const size_t index)
+{
+    for (size_t i = 0; i < psbt->num_outputs; ++i) {
+        uint8_t sp_info[WALLY_SP_V0_INFO_LEN];
+        size_t written = 0, found = 0;
+        if (wally_psbt_get_output_sp_v0_info(psbt, i, sp_info, sizeof(sp_info), &written) != WALLY_OK || !written) {
             continue;
         }
-        // A silent payment input can say specifically why it cannot be signed
-        const char* sp_errmsg = NULL;
-        if (!sp_get_input_key(
-                network_id, psbt, i, &iter, seckeys + (num_seckeys * EC_PRIVATE_KEY_LEN), &sp_errmsg)) {
-            *errmsg = sp_errmsg
-                ? sp_errmsg
-                : "This silent payment implementation requires ownership of all eligible inputs";
-            goto cleanup;
+        // The scan key is the first half of the output's sp v0 info. A global
+        // share for it covers every eligible input at once; failing that, this
+        // input must carry its own. Every scan key must be covered, not just
+        // some, or the outputs still cannot be derived.
+        if (wally_psbt_find_global_sp_ecdh_share(psbt, sp_info, EC_PUBLIC_KEY_LEN, &found) == WALLY_OK && found) {
+            continue;
         }
-        owned_inputs[i] = true;
-        ++num_seckeys;
+        if (wally_psbt_find_input_sp_ecdh_share(psbt, index, sp_info, EC_PUBLIC_KEY_LEN, &found) != WALLY_OK
+            || !found) {
+            return false;
+        }
     }
-    if (!num_seckeys) {
-        *errmsg = "Silent payment has no eligible inputs";
-        goto cleanup;
-    }
+    return true;
+}
 
-    get_random(entropy, sizeof(entropy));
-    if (wally_psbt_sp_resolve(psbt, seckeys, num_seckeys * EC_PRIVATE_KEY_LEN, entropy, sizeof(entropy), 0)
-        != WALLY_OK) {
-        *errmsg = "Failed to derive silent payment outputs, or a proposed script did not match";
-        goto cleanup;
+// Classify the eligible inputs by whether we hold their keys, collecting the
+// keys of those we do. 'owned_inputs' marks every input we can sign, eligible
+// or not, and 'indices' the eligible ones we own, in input order.
+static bool sp_classify_inputs(const network_t network_id, const struct wally_psbt* psbt, const bool resolved,
+    key_iter* iter, uint8_t* seckeys, size_t* indices, bool* owned_inputs, sp_summary_t* summary, const char** errmsg)
+{
+    for (size_t i = 0; i < psbt->num_inputs; ++i) {
+        size_t is_eligible = 0;
+        if (wally_psbt_get_input_sp_eligible(psbt, i, &is_eligible) != WALLY_OK) {
+            // WALLY_ERROR is impossible here, having been ruled out already
+            *errmsg = "Silent payment input utxo missing";
+            return false;
+        }
+        if (!is_eligible || resolved) {
+            // Nothing to contribute: we only need to know whether we can sign
+            // it. A resolved psbt needs no key of ours but the signing key.
+            owned_inputs[i] = key_iter_input_begin_public(psbt, i, iter);
+            continue;
+        }
+        // A silent payment input can say specifically why it cannot be signed.
+        // That is fatal however many of the others we could contribute for.
+        const char* sp_errmsg = NULL;
+        if (sp_get_input_key(
+                network_id, psbt, i, iter, seckeys + (summary->num_inputs_ours * EC_PRIVATE_KEY_LEN), &sp_errmsg)) {
+            indices[summary->num_inputs_ours] = i;
+            ++summary->num_inputs_ours;
+            owned_inputs[i] = true;
+        } else if (sp_errmsg) {
+            *errmsg = sp_errmsg;
+            return false;
+        } else if (sp_input_is_covered(psbt, i)) {
+            ++summary->num_inputs_covered;
+        } else {
+            ++summary->num_inputs_uncovered;
+        }
     }
+    return true;
+}
 
+// Fill in the recipients of the payment, which the psbt names whether or not
+// the outputs have been derived from them yet
+static bool sp_summarise_recipients(
+    const network_t network_id, const struct wally_psbt* psbt, sp_summary_t* summary, const char** errmsg)
+{
+    for (size_t i = 0; i < psbt->num_outputs; ++i) {
+        uint8_t sp_info[WALLY_SP_V0_INFO_LEN];
+        size_t written = 0;
+        if (wally_psbt_get_output_sp_v0_info(psbt, i, sp_info, sizeof(sp_info), &written) != WALLY_OK || !written) {
+            continue;
+        }
+        ++summary->num_recipients;
+        if (summary->num_recipients_shown == SP_MAX_SUMMARY_RECIPIENTS) {
+            continue; // Too many to show; the count still tells the user so
+        }
+        char* const address = summary->recipients[summary->num_recipients_shown];
+        if (!sp_encode_address(network_id, sp_info, written, address, MAX_ADDRESS_LEN)) {
+            *errmsg = "Failed to encode Silent Payment address";
+            return false;
+        }
+        ++summary->num_recipients_shown;
+    }
+    return true;
+}
+
+// Pin the inputs we sign to SIGHASH_ALL and fix the psbt's inputs and outputs,
+// as BIP375 requires of a resolved silent payment
+static void sp_finalise_resolved(struct wally_psbt* psbt, const bool* owned_inputs)
+{
     for (size_t i = 0; i < psbt->num_inputs; ++i) {
         if (owned_inputs[i]) {
             JADE_WALLY_VERIFY(wally_psbt_set_input_sighash(psbt, i, WALLY_SIGHASH_ALL));
         }
     }
-    // BIP375: the inputs and outputs of a resolved silent payment are fixed
     size_t mod_flags = 0;
     JADE_WALLY_VERIFY(wally_psbt_get_tx_modifiable_flags(psbt, &mod_flags));
     JADE_WALLY_VERIFY(wally_psbt_set_tx_modifiable_flags(
         psbt, mod_flags & ~(WALLY_PSBT_TXMOD_INPUTS | WALLY_PSBT_TXMOD_OUTPUTS)));
+}
+
+bool sp_process_psbt(const network_t network_id, struct wally_psbt* psbt, sp_summary_t* summary, sp_result_t* result,
+    const char** errmsg)
+{
+    JADE_ASSERT(psbt);
+    JADE_ASSERT(summary);
+    JADE_ASSERT(result);
+    JADE_ASSERT(errmsg);
+
+    memset(summary, 0, sizeof(*summary));
+    *result = SP_NONE;
+
+    if (!sp_num_outputs(psbt)) {
+        return true;
+    }
+
+    size_t sp_status = WALLY_SP_INVALID;
+    if (!sp_check_psbt(psbt, &sp_status, errmsg)) {
+        return false;
+    }
+
+    // Another signer may have resolved the outputs already, in which case we
+    // sign what they produced rather than deriving it ourselves. That needs no
+    // private key but our own, so we need not own every eligible input: a
+    // complete status means every output script is the one BIP352 derives from
+    // the shares, which the DLEQ proofs bind to the inputs being spent.
+    const bool resolved = sp_status == WALLY_SP_COMPLETE;
+
+    uint8_t* const seckeys = JADE_CALLOC(psbt->num_inputs, EC_PRIVATE_KEY_LEN);
+    size_t* const indices = JADE_CALLOC(psbt->num_inputs, sizeof(*indices));
+    bool* const owned_inputs = JADE_CALLOC(psbt->num_inputs, sizeof(*owned_inputs));
+    key_iter iter;
+    uint8_t entropy[SP_DLEQ_ENTROPY_LEN];
+    SENSITIVE_PUSH(&iter, sizeof(iter));
+    SENSITIVE_PUSH(seckeys, psbt->num_inputs * EC_PRIVATE_KEY_LEN);
+    SENSITIVE_PUSH(entropy, sizeof(entropy));
+
+    bool success = false;
+
+    if (!sp_classify_inputs(network_id, psbt, resolved, &iter, seckeys, indices, owned_inputs, summary, errmsg)) {
+        goto cleanup;
+    }
+
+    if (!resolved) {
+        if (!summary->num_inputs_ours) {
+            *errmsg = summary->num_inputs_covered || summary->num_inputs_uncovered
+                ? "This wallet owns none of the silent payment's eligible inputs"
+                : "Silent payment has no eligible inputs";
+            goto cleanup;
+        }
+        if (summary->num_inputs_covered || summary->num_inputs_uncovered) {
+            // We own only some of the eligible inputs, so we cannot derive the
+            // outputs alone. Report what we would contribute and leave the psbt
+            // untouched: the user confirms before anything is written.
+            if (!(storage_get_qr_flags() & SP_COLLABORATIVE)) {
+                *errmsg = "Collaborative silent payments are disabled - enable in Settings";
+                goto cleanup;
+            }
+            if (!sp_summarise_recipients(network_id, psbt, summary, errmsg)) {
+                goto cleanup;
+            }
+            *result = SP_CONTRIBUTE;
+            success = true;
+            goto cleanup;
+        }
+
+        // We own every eligible input, so one global share covers them all.
+        // A sender may propose the output scripts; wally rejects any that
+        // differ from what it derives, and leaves the psbt untouched if so
+        get_random(entropy, sizeof(entropy));
+        if (wally_psbt_sp_resolve(
+                psbt, seckeys, summary->num_inputs_ours * EC_PRIVATE_KEY_LEN, entropy, sizeof(entropy), 0)
+            != WALLY_OK) {
+            *errmsg = "Failed to derive silent payment outputs, or a proposed script did not match";
+            goto cleanup;
+        }
+    }
+
+    sp_finalise_resolved(psbt, owned_inputs);
+    *result = SP_SIGN;
     success = true;
 
 cleanup:
+    SENSITIVE_POP(entropy);
     SENSITIVE_POP(seckeys);
     SENSITIVE_POP(&iter);
     free(owned_inputs);
+    free(indices);
+    free(seckeys);
+    return success;
+}
+
+bool sp_contribute_psbt(
+    const network_t network_id, struct wally_psbt* psbt, sp_result_t* result, const char** errmsg)
+{
+    JADE_ASSERT(psbt);
+    JADE_ASSERT(result);
+    JADE_ASSERT(errmsg);
+
+    *result = SP_NONE;
+
+    // Both checks are only reachable if the psbt changed since sp_process_psbt()
+    if (!sp_num_outputs(psbt)) {
+        *errmsg = "Not a silent payment";
+        return false;
+    }
+    size_t sp_status = WALLY_SP_INVALID;
+    if (!sp_check_psbt(psbt, &sp_status, errmsg)) {
+        return false;
+    }
+
+    uint8_t* const seckeys = JADE_CALLOC(psbt->num_inputs, EC_PRIVATE_KEY_LEN);
+    size_t* const indices = JADE_CALLOC(psbt->num_inputs, sizeof(*indices));
+    bool* const owned_inputs = JADE_CALLOC(psbt->num_inputs, sizeof(*owned_inputs));
+    key_iter iter;
+    uint8_t entropy[SP_DLEQ_ENTROPY_LEN];
+    SENSITIVE_PUSH(&iter, sizeof(iter));
+    SENSITIVE_PUSH(seckeys, psbt->num_inputs * EC_PRIVATE_KEY_LEN);
+    SENSITIVE_PUSH(entropy, sizeof(entropy));
+
+    sp_summary_t summary = { 0 };
+    bool success = false;
+
+    if (!sp_classify_inputs(network_id, psbt, false, &iter, seckeys, indices, owned_inputs, &summary, errmsg)) {
+        goto cleanup;
+    }
+    if (!summary.num_inputs_ours) {
+        *errmsg = "This wallet owns none of the silent payment's eligible inputs";
+        goto cleanup;
+    }
+
+    get_random(entropy, sizeof(entropy));
+    if (wally_psbt_sp_contribute(psbt, indices, summary.num_inputs_ours, seckeys,
+            summary.num_inputs_ours * EC_PRIVATE_KEY_LEN, entropy, sizeof(entropy), 0)
+        != WALLY_OK) {
+        *errmsg = "Failed to add silent payment shares";
+        goto cleanup;
+    }
+
+    // Our shares may have been the last ones missing, in which case we can
+    // derive the outputs and go on to sign in this same pass. Resolving fails
+    // where the coverage is still incomplete, which is not an error here.
+    if (wally_psbt_sp_resolve_shares(psbt, 0) == WALLY_OK) {
+        sp_finalise_resolved(psbt, owned_inputs);
+        *result = SP_SIGN;
+    } else {
+        // Still waiting on another signer. The psbt keeps its modifiable flags
+        // and its inputs are left unsigned: SIGHASH_ALL commits to outputs
+        // which do not exist yet.
+        *result = SP_SHARES_ONLY;
+    }
+    success = true;
+
+cleanup:
+    SENSITIVE_POP(entropy);
+    SENSITIVE_POP(seckeys);
+    SENSITIVE_POP(&iter);
+    free(owned_inputs);
+    free(indices);
     free(seckeys);
     return success;
 }
