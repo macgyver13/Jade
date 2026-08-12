@@ -27,6 +27,10 @@
 #define QR_XPUB_LEGACY 0x800
 #define QR_XPUB_TAPROOT 0x1000
 
+// Whether to contribute BIP375 shares to a silent payment whose eligible
+// inputs this wallet does not entirely own
+#define SP_COLLABORATIVE 0x1
+
 #define KEY_FLAGS_AUTO_DEFAULT_PASSPHRASE 0x1
 #define KEY_FLAGS_USER_TO_ENTER_PASSPHRASE 0x2
 #define KEY_FLAGS_WORDLIST_PASSPHRASE 0x4
@@ -86,6 +90,9 @@ uint8_t storage_get_ble_flags(void);
 
 bool storage_set_qr_flags(uint32_t flags);
 uint32_t storage_get_qr_flags(void);
+
+bool storage_set_sp_flags(uint8_t flags);
+uint8_t storage_get_sp_flags(void);
 
 // Generic multisig
 bool storage_set_multisig_registration(const char* name, const uint8_t* registration, size_t registration_len);

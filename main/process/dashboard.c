@@ -182,6 +182,7 @@ gui_activity_t* make_locked_settings_activity(void);
 gui_activity_t* make_unlocked_settings_activity(void);
 
 gui_activity_t* make_wallet_settings_activity(void);
+gui_activity_t* make_sp_settings_activity(gui_view_node_t** collaborative_item);
 gui_activity_t* make_device_settings_activity(void);
 gui_activity_t* make_usbstorage_settings_activity(bool unlocked);
 gui_activity_t* make_authentication_activity(bool initialised_and_pin_unlocked);
@@ -1416,6 +1417,42 @@ static void handle_passphrase_prefs()
     }
 }
 
+// Handle silent payment preferences
+static void handle_sp_settings(void)
+{
+    gui_view_node_t* collaborative_item = NULL;
+    gui_activity_t* const act = make_sp_settings_activity(&collaborative_item);
+    uint8_t sp_flags = storage_get_sp_flags();
+    update_menu_item(collaborative_item, "Collaborative", sp_flags & SP_COLLABORATIVE ? "On" : "Off");
+
+    while (true) {
+        gui_set_current_activity(act);
+
+        const int32_t ev_id = gui_activity_wait_button(act, BTN_SETTINGS_SP_EXIT);
+        if (ev_id == BTN_SETTINGS_SP_EXPORT) {
+            display_sp_descriptor_qr();
+        } else if (ev_id == BTN_SETTINGS_SP_COLLABORATIVE) {
+            if (sp_flags & SP_COLLABORATIVE) {
+                sp_flags &= ~SP_COLLABORATIVE;
+            } else {
+                // Explain what enabling this permits before it is enabled: the
+                // outputs of such a transaction cannot be shown when the shares
+                // are added, only when it is later signed.
+                const char* message[] = { "Add shares to payments", "whose outputs are not",
+                    "known yet? Amounts are", "approved when signing." };
+                if (!await_yesno_activity("Collaborative", message, 4, false, NULL)) {
+                    continue;
+                }
+                sp_flags |= SP_COLLABORATIVE;
+            }
+            storage_set_sp_flags(sp_flags);
+            update_menu_item(collaborative_item, "Collaborative", sp_flags & SP_COLLABORATIVE ? "On" : "Off");
+        } else if (ev_id == BTN_SETTINGS_SP_EXIT) {
+            break;
+        }
+    }
+}
+
 // Helper to delete an otp record after user confirms
 static bool delete_otp_record(const char* otpname)
 {
@@ -2334,8 +2371,10 @@ static void handle_settings(const bool startup_menu)
             display_xpub_qr();
             break;
 
-        case BTN_SETTINGS_SP_EXPORT:
-            display_sp_descriptor_qr();
+        case BTN_SETTINGS_SP:
+            // Shows further screens, so the menu screen will have been freed
+            handle_sp_settings();
+            act = make_wallet_settings_activity();
             break;
 
         case BTN_SETTINGS_BIP85:
