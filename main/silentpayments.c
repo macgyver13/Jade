@@ -1,8 +1,10 @@
 #ifndef AMALGAMATED_BUILD
 #include "silentpayments.h"
 
+#include "descriptor.h"
 #include "jade_wally_verify.h"
 #include "keychain.h"
+#include "musig_session.h"
 #include "random.h"
 #include "sensitive.h"
 #include "storage.h"
@@ -11,8 +13,11 @@
 #include "wallet.h"
 
 #include <wally_address.h>
+#include <wally_bip32.h>
 #include <wally_core.h>
 #include <wally_descriptor.h>
+#include <wally_map.h>
+#include <wally_musig.h>
 #include <wally_psbt.h>
 #include <wally_psbt_members.h>
 #include <wally_silentpayments.h>
@@ -24,6 +29,130 @@
 
 // Entropy for the BIP375 DLEQ proofs, which wally expands per proof
 #define SP_DLEQ_ENTROPY_LEN 32
+#define SP_MUSIG_PATH_LEN 2
+
+typedef struct {
+    struct wally_sp_musig_input wally;
+    uint8_t agg_pubkey[EC_PUBLIC_KEY_LEN];
+    uint32_t path[SP_MUSIG_PATH_LEN];
+    uint8_t seckey[EC_PRIVATE_KEY_LEN];
+    uint8_t participant[EC_PUBLIC_KEY_LEN];
+} sp_musig_input_t;
+
+static bool sp_musig_descriptor_matches(const network_t network_id, const uint32_t branch, const uint32_t index,
+    const uint8_t* script, const size_t script_len)
+{
+    char names[MAX_DESCRIPTOR_REGISTRATIONS][NVS_KEY_NAME_MAX_SIZE];
+    size_t num_descriptors = 0;
+    if (!storage_get_all_descriptor_registration_names(
+            names, sizeof(names) / sizeof(names[0]), &num_descriptors)) {
+        return false;
+    }
+    for (size_t i = 0; i < num_descriptors; ++i) {
+        descriptor_data_t descriptor;
+        const char* errmsg = NULL;
+        uint8_t trial_script[WALLY_SCRIPTPUBKEY_P2WSH_LEN];
+        size_t trial_script_len = 0;
+        if (descriptor_load_from_storage(names[i], &descriptor, &errmsg)
+            && wallet_build_descriptor_script(network_id, names[i], &descriptor, branch, index, trial_script,
+                sizeof(trial_script), &trial_script_len, &errmsg)
+            && trial_script_len == script_len && !memcmp(trial_script, script, script_len)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Classify and bind one form-(b) MuSig input to a registered descriptor. The
+// PSBT supplies the participant list and synthetic path, but neither is trusted
+// until the registered descriptor reproduces the spent script.
+static bool sp_get_musig_input(const network_t network_id, const struct wally_psbt* psbt, const size_t index,
+    sp_musig_input_t* output, const char** errmsg)
+{
+    const struct wally_psbt_input* input = &psbt->inputs[index];
+    const struct wally_tx_output* utxo = NULL;
+    struct wally_musig_keyagg_cache* cache = NULL;
+    struct ext_key* synthetic = NULL;
+    struct ext_key participant_key;
+    uint8_t synthetic_fingerprint[BIP32_KEY_FINGERPRINT_LEN];
+    size_t found = 0;
+    bool success = false;
+
+    if (input->musig2_pubkeys.num_items != 1 || !input->musig2_pubkeys.items[0].key
+        || input->musig2_pubkeys.items[0].key_len != EC_PUBLIC_KEY_LEN
+        || input->musig2_pubkeys.items[0].value_len < 2 * EC_PUBLIC_KEY_LEN
+        || input->musig2_pubkeys.items[0].value_len % EC_PUBLIC_KEY_LEN) {
+        *errmsg = "Invalid MuSig2 participant list";
+        return false;
+    }
+    const struct wally_map_item* const item = &input->musig2_pubkeys.items[0];
+    memcpy(output->agg_pubkey, item->key, sizeof(output->agg_pubkey));
+    output->wally.index = index;
+    output->wally.pub_keys = item->value;
+    output->wally.pub_keys_len = item->value_len;
+    output->wally.path = output->path;
+    output->wally.path_len = SP_MUSIG_PATH_LEN;
+
+    uint8_t aggregate[EC_PUBLIC_KEY_LEN];
+    if (wally_musig_pubkey_agg(item->value, item->value_len, NULL, 0, &cache) != WALLY_OK
+        || wally_musig_pubkey_get(cache, aggregate, sizeof(aggregate)) != WALLY_OK
+        || memcmp(aggregate, output->agg_pubkey, sizeof(aggregate))
+        || wally_musig_pubkey_to_xpub(
+               aggregate, sizeof(aggregate), BIP32_VER_MAIN_PUBLIC, &synthetic)
+            != WALLY_OK
+        || bip32_key_get_fingerprint(synthetic, synthetic_fingerprint, sizeof(synthetic_fingerprint)) != WALLY_OK) {
+        *errmsg = "MuSig2 aggregate does not match its participants";
+        goto cleanup;
+    }
+
+    for (size_t i = 0; i < input->taproot_leaf_paths.num_items; ++i) {
+        uint8_t fingerprint[BIP32_KEY_FINGERPRINT_LEN];
+        size_t path_len = 0;
+        if (wally_map_keypath_get_item_fingerprint(
+                &input->taproot_leaf_paths, i, fingerprint, sizeof(fingerprint))
+                == WALLY_OK
+            && !memcmp(fingerprint, synthetic_fingerprint, sizeof(fingerprint))
+            && wally_map_keypath_get_item_path(
+                   &input->taproot_leaf_paths, i, output->path, SP_MUSIG_PATH_LEN, &path_len)
+                == WALLY_OK
+            && path_len == SP_MUSIG_PATH_LEN && output->path[0] < BIP32_INITIAL_HARDENED_CHILD
+            && output->path[1] < BIP32_INITIAL_HARDENED_CHILD) {
+            ++found;
+        }
+    }
+    if (found != 1 || wally_psbt_get_input_best_utxo(psbt, index, &utxo) != WALLY_OK || !utxo
+        || !sp_musig_descriptor_matches(
+            network_id, output->path[0], output->path[1], utxo->script, utxo->script_len)) {
+        *errmsg = "MuSig2 input does not match a registered descriptor";
+        goto cleanup;
+    }
+
+    found = 0;
+    if (wally_map_keypath_get_bip32_key_from(
+            &input->taproot_leaf_paths, 0, &keychain_get()->xpriv, &participant_key, &found)
+            != WALLY_OK
+        || !found || participant_key.priv_key[0] != BIP32_FLAG_KEY_PRIVATE) {
+        *errmsg = "This wallet is not a MuSig2 participant";
+        goto cleanup;
+    }
+    for (size_t i = 0; i < item->value_len; i += EC_PUBLIC_KEY_LEN) {
+        if (!memcmp(participant_key.pub_key, item->value + i, EC_PUBLIC_KEY_LEN)) {
+            memcpy(output->participant, participant_key.pub_key, sizeof(output->participant));
+            memcpy(output->seckey, participant_key.priv_key + 1, sizeof(output->seckey));
+            success = true;
+            break;
+        }
+    }
+    if (!success) {
+        *errmsg = "Wallet key is not in the MuSig2 participant list";
+    }
+
+cleanup:
+    JADE_WALLY_VERIFY(wally_musig_keyagg_cache_free(cache));
+    JADE_WALLY_VERIFY(bip32_key_free(synthetic));
+    JADE_WALLY_VERIFY(wally_bzero(&participant_key, sizeof(participant_key)));
+    return success;
+}
 
 bool sp_encode_address(const network_t network_id, const uint8_t* sp_v0_info, const size_t sp_v0_info_len,
     char* output, const size_t output_len)
@@ -358,6 +487,12 @@ static bool sp_summarise_recipients(
         char* const address = summary->recipients[summary->num_recipients_shown];
         if (!sp_encode_address(network_id, sp_info, written, address, MAX_ADDRESS_LEN)) {
             *errmsg = "Failed to encode Silent Payment address";
+            return false;
+        }
+        if (wally_psbt_get_output_amount(psbt, i,
+                &summary->recipient_amounts[summary->num_recipients_shown])
+            != WALLY_OK) {
+            *errmsg = "Silent Payment output amount missing";
             return false;
         }
         ++summary->num_recipients_shown;

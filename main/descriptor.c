@@ -341,22 +341,56 @@ bool descriptor_get_signers(const char* name, const descriptor_data_t* descripto
         goto cleanup;
     }
 
+    size_t num_signers = num_keys;
+    uint32_t descriptor_features = 0;
+    if (wally_descriptor_get_features(d, &descriptor_features) != WALLY_OK) {
+        *errmsg = "Failed to inspect descriptor features";
+        goto cleanup;
+    }
+    if (descriptor_features & WALLY_MS_IS_MUSIG) {
+        num_signers = 0;
+        for (size_t i = 0; i < num_keys; ++i) {
+            uint32_t key_features = 0;
+            if (wally_descriptor_get_key_features(d, i, &key_features) != WALLY_OK) {
+                *errmsg = "Failed to get key features";
+                goto cleanup;
+            }
+            if (key_features & WALLY_MS_IS_MUSIG) {
+                size_t num_participants = 0;
+                if (!(key_features & WALLY_MS_IS_RANGED)) {
+                    *errmsg = "MuSig aggregate must have a wildcard child path";
+                    goto cleanup;
+                }
+                if (wally_descriptor_get_musig_num_participants(d, i, &num_participants) != WALLY_OK
+                    || !num_participants || num_participants > MAX_ALLOWED_SIGNERS - num_signers) {
+                    *errmsg = "Invalid number of MuSig participants";
+                    goto cleanup;
+                }
+                num_signers += num_participants;
+            } else if (num_signers == MAX_ALLOWED_SIGNERS) {
+                *errmsg = "Too many signers in descriptor";
+                goto cleanup;
+            } else {
+                ++num_signers;
+            }
+        }
+    }
+
     if (!signers) {
         // Caller only wants number of signers
-        *written = num_keys;
+        *written = num_signers;
         retval = true;
         goto cleanup;
     }
 
     // If caller wants signer details, must pass sufficient output
-    if (signers_len < num_keys) {
+    if (signers_len < num_signers) {
         *errmsg = "Insufficient output to fetch signer details from descriptor";
         goto cleanup;
     }
 
+    size_t signer_index = 0;
     for (size_t i = 0; i < num_keys; ++i) {
-        signer_t* const signer = signers + i;
-
         // Check features supported
         char* str = NULL;
         uint32_t key_features = 0;
@@ -364,6 +398,83 @@ bool descriptor_get_signers(const char* name, const descriptor_data_t* descripto
             *errmsg = "Failed to get key features";
             goto cleanup;
         }
+        if (key_features & WALLY_MS_IS_MUSIG) {
+            size_t num_participants = 0;
+            if (wally_descriptor_get_musig_num_participants(d, i, &num_participants) != WALLY_OK) {
+                *errmsg = "Failed to get MuSig participants";
+                goto cleanup;
+            }
+            for (size_t participant_index = 0; participant_index < num_participants; ++participant_index) {
+                signer_t* const signer = signers + signer_index++;
+                uint32_t participant_features = 0;
+                if (wally_descriptor_get_musig_participant_key_features(
+                        d, i, participant_index, &participant_features)
+                    != WALLY_OK) {
+                    *errmsg = "Failed to get MuSig participant key features";
+                    goto cleanup;
+                }
+                if ((participant_features
+                        & (WALLY_MS_IS_PRIVATE | WALLY_MS_IS_UNCOMPRESSED | WALLY_MS_IS_RAW | WALLY_MS_IS_PARENTED))
+                    != WALLY_MS_IS_PARENTED) {
+                    *errmsg = "Invalid MuSig participant key features";
+                    goto cleanup;
+                }
+
+                if (wally_descriptor_get_musig_participant_key_origin_fingerprint(
+                        d, i, participant_index, signer->fingerprint, sizeof(signer->fingerprint))
+                    != WALLY_OK) {
+                    *errmsg = "Failed to get MuSig participant fingerprint";
+                    goto cleanup;
+                }
+
+                if (wally_descriptor_get_musig_participant_key_origin_path_str(d, i, participant_index, &str)
+                        != WALLY_OK
+                    || !str) {
+                    *errmsg = "Failed to get MuSig participant derivation path string";
+                    goto cleanup;
+                }
+                const size_t derivation_path_len = sizeof(signer->derivation) / sizeof(signer->derivation[0]);
+                if (!wallet_bip32_path_from_str(
+                        str, strlen(str), signer->derivation, derivation_path_len, &signer->derivation_len)) {
+                    *errmsg = "Failed to parse MuSig participant derivation path string";
+                    JADE_WALLY_VERIFY(wally_free_string(str));
+                    goto cleanup;
+                }
+                JADE_WALLY_VERIFY(wally_free_string(str));
+
+                str = NULL;
+                if (wally_descriptor_get_musig_participant_key(d, i, participant_index, &str) != WALLY_OK || !str) {
+                    *errmsg = "Failed to get MuSig participant key/xpub string";
+                    goto cleanup;
+                }
+                const char* xpub = str;
+                if (*xpub == '[') {
+                    const char* const origin_end = strchr(xpub, ']');
+                    if (!origin_end || !origin_end[1]) {
+                        *errmsg = "Invalid MuSig participant key/xpub string";
+                        JADE_WALLY_VERIFY(wally_free_string(str));
+                        goto cleanup;
+                    }
+                    xpub = origin_end + 1;
+                }
+                const size_t xpub_len = strlen(xpub);
+                if (xpub_len >= sizeof(signer->xpub)) {
+                    *errmsg = "MuSig participant xpub string too long";
+                    JADE_WALLY_VERIFY(wally_free_string(str));
+                    goto cleanup;
+                }
+                strcpy(signer->xpub, xpub);
+                signer->xpub_len = xpub_len;
+                JADE_WALLY_VERIFY(wally_free_string(str));
+
+                signer->path_str[0] = '\0';
+                signer->path_len = 0;
+                signer->path_is_string = true;
+            }
+            continue;
+        }
+
+        signer_t* const signer = signers + signer_index++;
         if ((key_features & (WALLY_MS_IS_PRIVATE | WALLY_MS_IS_UNCOMPRESSED | WALLY_MS_IS_RAW | WALLY_MS_IS_PARENTED))
             != WALLY_MS_IS_PARENTED) {
             *errmsg = "Invalid key features";
@@ -439,7 +550,7 @@ bool descriptor_get_signers(const char* name, const descriptor_data_t* descripto
     }
 
     // Return the number of signers written
-    *written = num_keys;
+    *written = num_signers;
     retval = true;
 
 cleanup:
