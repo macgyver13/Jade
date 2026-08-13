@@ -37,9 +37,10 @@ typedef enum {
     SP_MUSIG_SIGN,
 } sp_result_t;
 
-// What can be told to the user about a silent payment before it is resolved:
-// its recipients are named by the psbt, but its output scripts, and so its
-// amounts and change, are not derivable until every share is present.
+// What can be told to the user before a silent payment is resolved. Recipient
+// addresses and output amounts are explicit; scripts and change classification
+// are not available until every share is present. Non-SP outputs are counted so
+// the user can see that outputs other than the listed recipients exist.
 #define SP_MAX_SUMMARY_RECIPIENTS 4
 typedef struct {
     // The eligible inputs, by whether this wallet holds their keys, and for
@@ -52,6 +53,8 @@ typedef struct {
     uint64_t recipient_amounts[SP_MAX_SUMMARY_RECIPIENTS];
     size_t num_recipients;
     size_t num_recipients_shown;
+    size_t num_change_outputs;
+    size_t num_other_outputs;
 } sp_summary_t;
 
 /** Resolve, contribute to, or check any PSBT_OUT_SP_V0_INFO outputs in the psbt.

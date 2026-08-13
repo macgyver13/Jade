@@ -15,6 +15,7 @@ struct wally_tx;
 bool show_sp_contribute_activity(const sp_summary_t* summary, bool is_musig);
 bool show_sp_musig_sign_activity(void);
 void show_sp_musig_mismatch_activity(void);
+void show_sp_musig_changed_activity(void);
 void show_sp_musig_expired_activity(void);
 
 bool show_btc_transaction_outputs_activity(

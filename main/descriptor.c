@@ -404,6 +404,20 @@ bool descriptor_get_signers(const char* name, const descriptor_data_t* descripto
                 *errmsg = "Failed to get MuSig participants";
                 goto cleanup;
             }
+            char* child_path = NULL;
+            if (wally_descriptor_get_key_child_path_str(d, i, &child_path) != WALLY_OK || !child_path) {
+                *errmsg = "Failed to get MuSig aggregate child path string";
+                goto cleanup;
+            }
+            const size_t child_path_len = strlen(child_path);
+            if (child_path_len >= sizeof(signers[0].path_str)) {
+                *errmsg = "MuSig aggregate child path string too long";
+                JADE_WALLY_VERIFY(wally_free_string(child_path));
+                goto cleanup;
+            }
+            char aggregate_path[sizeof(signers[0].path_str)];
+            strcpy(aggregate_path, child_path);
+            JADE_WALLY_VERIFY(wally_free_string(child_path));
             for (size_t participant_index = 0; participant_index < num_participants; ++participant_index) {
                 signer_t* const signer = signers + signer_index++;
                 uint32_t participant_features = 0;
@@ -467,8 +481,8 @@ bool descriptor_get_signers(const char* name, const descriptor_data_t* descripto
                 signer->xpub_len = xpub_len;
                 JADE_WALLY_VERIFY(wally_free_string(str));
 
-                signer->path_str[0] = '\0';
-                signer->path_len = 0;
+                strcpy(signer->path_str, aggregate_path);
+                signer->path_len = child_path_len;
                 signer->path_is_string = true;
             }
             continue;
