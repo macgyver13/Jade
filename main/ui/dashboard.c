@@ -323,11 +323,28 @@ gui_activity_t* make_wallet_settings_activity(void)
         { .txt = NULL, .font = GUI_DEFAULT_FONT, .ev_id = GUI_BUTTON_EVENT_NONE } };
 
     btn_data_t menubtns[] = { { .txt = "Export Xpub", .font = GUI_DEFAULT_FONT, .ev_id = BTN_SETTINGS_XPUB_EXPORT },
-        { .txt = "Export SP Descriptor", .font = GUI_DEFAULT_FONT, .ev_id = BTN_SETTINGS_SP_EXPORT },
+        { .txt = "Silent Payments", .font = GUI_DEFAULT_FONT, .ev_id = BTN_SETTINGS_SP },
         { .txt = "Registered Wallets", .font = GUI_DEFAULT_FONT, .ev_id = BTN_SETTINGS_REGISTERED_WALLETS },
         { .txt = "BIP85", .font = GUI_DEFAULT_FONT, .ev_id = BTN_SETTINGS_BIP85 } };
 
     return make_menu_activity("Wallet", hdrbtns, 2, menubtns, 4);
+}
+
+gui_activity_t* make_sp_settings_activity(gui_view_node_t** collaborative_item)
+{
+    JADE_INIT_OUT_PPTR(collaborative_item);
+
+    btn_data_t hdrbtns[] = { { .txt = "=", .font = JADE_SYMBOLS_16x16_FONT, .ev_id = BTN_SETTINGS_SP_EXIT },
+        { .txt = NULL, .font = GUI_DEFAULT_FONT, .ev_id = GUI_BUTTON_EVENT_NONE } };
+
+    // Menu button with bespoke content, as it displays the current setting
+    gui_make_text(collaborative_item, "Collaborative", TFT_WHITE);
+    gui_set_align(*collaborative_item, GUI_ALIGN_CENTER, GUI_ALIGN_MIDDLE);
+
+    btn_data_t menubtns[] = { { .txt = "Export Descriptor", .font = GUI_DEFAULT_FONT, .ev_id = BTN_SETTINGS_SP_EXPORT },
+        { .content = *collaborative_item, .ev_id = BTN_SETTINGS_SP_COLLABORATIVE } };
+
+    return make_menu_activity("Silent Payments", hdrbtns, 2, menubtns, 2);
 }
 
 #if defined(CONFIG_IDF_TARGET_ESP32S3) && defined(CONFIG_HAS_BATTERY)
