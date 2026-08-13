@@ -27,6 +27,11 @@
 #define QR_XPUB_LEGACY 0x800
 #define QR_XPUB_TAPROOT 0x1000
 
+// Whether to contribute BIP375 shares to a silent payment whose eligible
+// inputs this wallet does not entirely own. NOTE: stored in the qr flags
+// alongside the account index, which is likewise not specific to QR mode.
+#define SP_COLLABORATIVE 0x2000
+
 #define KEY_FLAGS_AUTO_DEFAULT_PASSPHRASE 0x1
 #define KEY_FLAGS_USER_TO_ENTER_PASSPHRASE 0x2
 #define KEY_FLAGS_WORDLIST_PASSPHRASE 0x4
