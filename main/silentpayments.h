@@ -29,11 +29,18 @@ typedef enum {
     // remaining signers add theirs. There is nothing to sign yet: SIGHASH_ALL
     // commits to outputs that do not exist. The psbt is returned as it stands.
     SP_SHARES_ONLY,
+    // Add aggregate silent-payment shares and a MuSig2 public nonce, without
+    // signing even if this contribution resolves the outputs.
+    SP_MUSIG_CONTRIBUTE,
+    // Aggregate silent-payment outputs and shares have been verified and the
+    // held round-1 nonce can now be consumed to add our partial signature.
+    SP_MUSIG_SIGN,
 } sp_result_t;
 
-// What can be told to the user about a silent payment before it is resolved:
-// its recipients are named by the psbt, but its output scripts, and so its
-// amounts and change, are not derivable until every share is present.
+// What can be told to the user before a silent payment is resolved. Recipient
+// addresses and output amounts are explicit; scripts and change classification
+// are not available until every share is present. Non-SP outputs are counted so
+// the user can see that outputs other than the listed recipients exist.
 #define SP_MAX_SUMMARY_RECIPIENTS 4
 typedef struct {
     // The eligible inputs, by whether this wallet holds their keys, and for
@@ -43,8 +50,11 @@ typedef struct {
     size_t num_inputs_uncovered;
     // The recipient addresses, truncated to the first SP_MAX_SUMMARY_RECIPIENTS
     char recipients[SP_MAX_SUMMARY_RECIPIENTS][MAX_ADDRESS_LEN];
+    uint64_t recipient_amounts[SP_MAX_SUMMARY_RECIPIENTS];
     size_t num_recipients;
     size_t num_recipients_shown;
+    size_t num_change_outputs;
+    size_t num_other_outputs;
 } sp_summary_t;
 
 /** Resolve, contribute to, or check any PSBT_OUT_SP_V0_INFO outputs in the psbt.
@@ -104,6 +114,11 @@ WARN_UNUSED_RESULT bool sp_validate_spend_input(const struct wally_psbt* psbt, s
  * derived at must be one we would use for silent payments.
  */
 WARN_UNUSED_RESULT bool sp_validate_spend_key_path(network_t network_id, const key_iter* iter, const char** errmsg);
+
+/** Consume the stored round-1 nonces and add this device's MuSig2 partial
+ * signatures. Only valid after sp_process_psbt() returns SP_MUSIG_SIGN. */
+WARN_UNUSED_RESULT bool sp_musig_sign_psbt(
+    network_t network_id, struct wally_psbt* psbt, bool* musig_inputs, const char** errmsg);
 
 /** Encode a BIP352 v0 address from a PSBT_OUT_SP_V0_INFO value. */
 WARN_UNUSED_RESULT bool sp_encode_address(
