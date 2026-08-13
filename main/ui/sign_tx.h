@@ -12,7 +12,10 @@ struct wally_tx;
 
 // Confirm contributing this wallet's BIP375 shares to a silent payment it
 // cannot resolve alone. Returns false if the user declines.
-bool show_sp_contribute_activity(const sp_summary_t* summary);
+bool show_sp_contribute_activity(const sp_summary_t* summary, bool is_musig);
+bool show_sp_musig_sign_activity(void);
+void show_sp_musig_mismatch_activity(void);
+void show_sp_musig_expired_activity(void);
 
 bool show_btc_transaction_outputs_activity(
     network_t network_id, const struct wally_tx* tx, const output_info_t* output_info);
