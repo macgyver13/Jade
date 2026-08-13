@@ -720,8 +720,31 @@ int sign_psbt(jade_process_t* process, CborValue* params, const network_t networ
         return CBOR_RPC_BAD_PARAMETERS;
     }
     const bool for_liquid = is_elements;
-    if (!sp_process_psbt(network_id, psbt, errmsg)) {
+    sp_summary_t sp_summary;
+    sp_result_t sp_result = SP_NONE;
+    if (!sp_process_psbt(network_id, psbt, &sp_summary, &sp_result, errmsg)) {
         return CBOR_RPC_BAD_PARAMETERS;
+    }
+    if (sp_result == SP_CONTRIBUTE) {
+        // We hold only some of the eligible inputs, so we can add our shares
+        // but cannot derive the outputs - and so cannot sign, SIGHASH_ALL
+        // committing to outputs that do not exist yet. Confirm what little can
+        // be shown, add the shares, and return the psbt for the next signer.
+        if (!show_sp_contribute_activity(&sp_summary)) {
+            *errmsg = "User declined to contribute silent payment shares";
+            return CBOR_RPC_USER_CANCELLED;
+        }
+        if (!sp_contribute_psbt(network_id, psbt, &sp_result, errmsg)) {
+            return CBOR_RPC_BAD_PARAMETERS;
+        }
+        if (sp_result == SP_SHARES_ONLY) {
+            // Nothing to sign, and nothing more to show the user: the caller
+            // returns the psbt carrying our shares and no signatures
+            return 0;
+        }
+        // Our shares completed the coverage, so the outputs are resolved and
+        // this signer is also the last one: fall through to the usual flow,
+        // where the user approves the amounts and fee before signing.
     }
     // Liquid: Optional ELIP-0101 genesis blockhash can override test network defaults.
     // Defers to params_genesis_hash() for validation (only needed for Lisuid/PSET).
