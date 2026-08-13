@@ -15,8 +15,15 @@ helpers in the vendored tree's contrib/sp_psbt_roundtrip.py. What the round
 trip checks is that Jade's descriptor, its derived output and its BIP-375
 share all agree with each other and with a scanner that never saw the PSBT.
 
+With --collaborative it instead runs the BIP-375 two signer flow, where Jade
+holds only one of the two eligible inputs: it must contribute its share
+without signing, and sign only once the other signer's share completes the
+coverage and the outputs are resolved. That needs 'Collaborative' On under
+Settings > Wallet > Silent Payments.
+
 Run against the emulator with:
   python test_sp_roundtrip.py --serialport tcp:127.0.0.1:30121
+  python test_sp_roundtrip.py --serialport tcp:127.0.0.1:30121 --collaborative
 
 The vendored libwally must be built for the host, ie. run ./configure and
 make in components/libwally-core/upstream. Set JADE_WALLY_DIR to use another
@@ -299,6 +306,124 @@ def run_roundtrip(jade, network='localtest', account=0, num_inputs=2, verbose=Tr
     return {'psbt': psbt, 'signed': signed, 'recipient': recipient, 'script': scripts[0]}
 
 
+FOREIGN_PRIVKEY = bytes([0x77] * 32)
+FOREIGN_FINGERPRINT = bytes([0xde, 0xad, 0xbe, 0xef])
+
+
+def get_foreign_key(sp):
+    """A p2wpkh input belonging to another signer, not to Jade.
+
+    The keypath makes it eligible - BIP-352 needs to see that the key is
+    compressed - while the foreign fingerprint keeps Jade from claiming it.
+    """
+    pubkey = sp.pubkey_from_privkey(FOREIGN_PRIVKEY)
+    return {'privkey': FOREIGN_PRIVKEY,
+            'pubkey': pubkey,
+            'script': sp.p2wpkh_script(pubkey),
+            'fingerprint': FOREIGN_FINGERPRINT,
+            'path': [BIP84_PURPOSE, COIN_TYPES['localtest'], 0 | HARDENED, 0, 0]}
+
+
+def input_share(sp, psbt, index, scan_pubkey):
+    """Read a BIP-375 per-input share, or None if the input carries none."""
+    ret, found = sp.wally_psbt_find_input_sp_ecdh_share(psbt, index, scan_pubkey,
+                                                        len(scan_pubkey))
+    if ret != sp.WALLY_OK or not found:
+        return None
+    item = psbt.contents.inputs[index].sp_ecdh_shares.items[found - 1]  # 1 based
+    return sp.string_at(item.value, item.value_len)
+
+
+def run_collaborative_roundtrip(jade, network='localtest', account=0, verbose=True):
+    """Two signers: Jade contributes shares for its input, then signs last.
+
+    Jade holds one eligible input and another signer holds the other, so
+    neither can derive the outputs alone. Jade must add its BIP-375 share
+    without signing, and only sign once the other signer's share completes the
+    coverage and the outputs are resolved.
+
+    NOTE: requires 'Collaborative' to be On under Settings > Wallet > Silent
+    Payments; Jade refuses the psbt outright otherwise.
+    """
+    sp = load_wally()
+    assert sp, f'no libwally build found under {WALLY_DIR}'
+
+    def log(message):
+        if verbose:
+            print(message)
+
+    recipient = get_recipient(jade, sp, network, account)
+    ours, change = get_wallet_keys(jade, sp, network, 1)
+    foreign = get_foreign_key(sp)
+    log(f'Pay to: {recipient["address"]}')
+
+    # Input 0 is Jade's, input 1 is the other signer's
+    psbt_bytes = build_psbt(sp, [ours[0], foreign], change, recipient['info'])
+    log(f'PSBT built with 1 Jade input and 1 foreign input ({len(psbt_bytes)} bytes)')
+
+    try:
+        contributed = bytes(jade.sign_psbt(network, psbt_bytes))
+    except Exception as e:
+        if 'Collaborative silent payments are disabled' in str(e):
+            print('Enable Settings > Wallet > Silent Payments > Collaborative first')
+        raise
+
+    # Jade must have added its share and nothing else: no signature, and no
+    # output script, since the outputs cannot be derived until we add ours
+    psbt = sp.POINTER(sp.wally_psbt)()
+    assert sp.wally_psbt_from_bytes(contributed, len(contributed), 0,
+                                    sp.byref(psbt)) == sp.WALLY_OK
+    assert psbt.contents.inputs[0].signatures.num_items == 0, 'Jade signed too early'
+    share = input_share(sp, psbt, 0, recipient['scan_pubkey'])
+    assert share and len(share) == sp.EC_PUBLIC_KEY_LEN, 'Jade wrote no per-input share'
+    assert not input_share(sp, psbt, 1, recipient['scan_pubkey']), 'share on a foreign input'
+    assert sp.wally_psbt_get_output_script_len(psbt, 0) == (sp.WALLY_OK, 0), \
+        'outputs resolved without full coverage'
+    ret, status = sp.wally_psbt_get_sp_status(psbt, 0)
+    assert (ret, status) == (sp.WALLY_OK, 1), f'status {status}, expected incomplete'
+    log(f'Jade contributed a {len(share)} byte share for its input, and did not sign')
+
+    # Jade cannot resolve this yet, and must say so rather than signing
+    assert sp.wally_psbt_sp_resolve_shares(psbt, 0) != sp.WALLY_OK
+
+    # The other signer adds its share, which completes the coverage, and
+    # resolves the outputs - work that needs no private key at all
+    indices = (sp.c_size_t * 1)(1)
+    entropy, entropy_len = sp.make_cbuffer('a5' * 32)
+    assert sp.wally_psbt_sp_contribute(psbt, indices, 1, foreign['privkey'],
+                                       len(foreign['privkey']), entropy, entropy_len,
+                                       0) == sp.WALLY_OK
+    assert sp.wally_psbt_sp_resolve_shares(psbt, 0) == sp.WALLY_OK
+    ret, status = sp.wally_psbt_get_sp_status(psbt, 0)
+    assert (ret, status) == (sp.WALLY_OK, 2), f'status {status}, expected complete'
+    log('Other signer contributed its share and resolved the outputs')
+
+    buf, buf_len = sp.make_cbuffer('00' * 4096)
+    ret, written = sp.wally_psbt_to_bytes(psbt, 0, buf, buf_len)
+    assert ret == sp.WALLY_OK
+    sp.wally_psbt_free(psbt)
+
+    # Jade is now the final signer: it verifies the resolved outputs against
+    # the shares, shows the amounts, and signs the one input it owns
+    signed = bytes(jade.sign_psbt(network, bytes(buf[:written])))
+    psbt = sp.POINTER(sp.wally_psbt)()
+    assert sp.wally_psbt_from_bytes(signed, len(signed), 0, sp.byref(psbt)) == sp.WALLY_OK
+    assert psbt.contents.inputs[0].signatures.num_items == 1, 'Jade did not sign its input'
+    assert psbt.contents.inputs[1].signatures.num_items == 0, 'Jade signed a foreign input'
+
+    unsigned = sp.POINTER(sp.wally_tx)()
+    assert sp.wally_psbt_extract(psbt, WALLY_PSBT_EXTRACT_NON_FINAL,
+                                 sp.byref(unsigned)) == sp.WALLY_OK
+    verify_input_signature(sp, psbt, unsigned, 0)
+    sp.wally_tx_free(unsigned)
+    script, script_len = sp.make_cbuffer('00' * 34)
+    ret, _ = sp.wally_psbt_get_output_script(psbt, 0, script, script_len)
+    assert ret == sp.WALLY_OK
+    sp.wally_psbt_free(psbt)
+    log(f'Jade signed its input against the resolved payment: {bytes(script).hex()}')
+    return {'signed': signed, 'recipient': recipient, 'script': bytes(script)}
+
+
 def main():
     parser = argparse.ArgumentParser(description='Silent payment round trip against a Jade')
     parser.add_argument('--serialport', default='tcp:127.0.0.1:30121',
@@ -309,6 +434,9 @@ def main():
     parser.add_argument('--account', type=int, default=0)
     parser.add_argument('--mnemonic', default=TEST_MNEMONIC,
                         help='Temporary wallet to load (debug builds only)')
+    parser.add_argument('--collaborative', action='store_true',
+                        help='Run the two signer round trip instead; needs '
+                             'Settings > Wallet > Silent Payments > Collaborative On')
     args = parser.parse_args()
 
     if not load_wally():
@@ -317,7 +445,10 @@ def main():
     from jadepy.jade import JadeAPI
     with JadeAPI.create_serial(device=args.serialport, timeout=args.timeout) as jade:
         jade.set_mnemonic(args.mnemonic, temporary_wallet=True)
-        run_roundtrip(jade, args.network, args.account)
+        if args.collaborative:
+            run_collaborative_roundtrip(jade, args.network, args.account)
+        else:
+            run_roundtrip(jade, args.network, args.account)
     print('Silent payment round trip complete')
 
 
