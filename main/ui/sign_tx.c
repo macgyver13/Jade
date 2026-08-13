@@ -420,40 +420,80 @@ static bool show_input_output_activity(const char* title, const bool is_wallet_o
     }
 }
 
-bool show_sp_contribute_activity(const sp_summary_t* summary)
+bool show_sp_contribute_activity(const sp_summary_t* summary, const bool is_musig)
 {
     JADE_ASSERT(summary);
     JADE_ASSERT(summary->num_inputs_ours);
     JADE_ASSERT(summary->num_recipients);
 
-    // The recipients are the only part of the payment that can be shown: the
-    // psbt names them, whereas the output scripts - and so the amounts and any
-    // change - cannot be derived until every signer has added its share.
     for (size_t i = 0; i < summary->num_recipients_shown; ++i) {
-        if (!show_confirm_address_activity_ex("Silent Payment", summary->recipients[i], true, true)) {
+        if (!is_musig && !show_confirm_address_activity_ex("Silent Payment", summary->recipients[i], true, true)) {
             return false;
+        }
+        if (is_musig) {
+            char title[24], amount[32];
+            int ret = snprintf(title, sizeof(title), "Recipient %u/%u", i + 1, summary->num_recipients);
+            JADE_ASSERT(ret > 0 && ret < sizeof(title));
+            ret = snprintf(amount, sizeof(amount), "%.08f", 1.0 * summary->recipient_amounts[i] / 1e8);
+            JADE_ASSERT(ret > 0 && ret < sizeof(amount));
+            if (!show_input_output_activity(
+                    title, false, true, "Output pending", amount, TICKER_BTC, NULL, NULL, NULL)) {
+                return false;
+            }
+            if (!show_confirm_address_activity_ex("Silent Payment", summary->recipients[i], true, true)) {
+                return false;
+            }
         }
     }
 
-    char ours[32], others[32], recipients[32];
+    char inputs[32], recipients[32], outputs[32];
     const size_t num_others = summary->num_inputs_covered + summary->num_inputs_uncovered;
-    int ret = snprintf(ours, sizeof(ours), "Your inputs: %u", summary->num_inputs_ours);
-    JADE_ASSERT(ret > 0 && ret < sizeof(ours));
-    ret = snprintf(others, sizeof(others), "Other inputs: %u", num_others);
-    JADE_ASSERT(ret > 0 && ret < sizeof(others));
+    int ret = num_others
+        ? snprintf(inputs, sizeof(inputs), "Inputs ours/other: %u/%u", summary->num_inputs_ours, num_others)
+        : snprintf(inputs, sizeof(inputs), "Inputs: %u", summary->num_inputs_ours);
+    JADE_ASSERT(ret > 0 && ret < sizeof(inputs));
     ret = snprintf(recipients, sizeof(recipients), "Recipients: %u", summary->num_recipients);
     JADE_ASSERT(ret > 0 && ret < sizeof(recipients));
+    ret = summary->num_other_outputs
+        ? snprintf(outputs, sizeof(outputs), "Change: %u Other: %u", summary->num_change_outputs,
+              summary->num_other_outputs)
+        : snprintf(outputs, sizeof(outputs), "Change: %u", summary->num_change_outputs);
+    JADE_ASSERT(ret > 0 && ret < sizeof(outputs));
 
-    const char* summary_msg[] = { ours, others, recipients };
+    const char* summary_msg[] = { inputs, recipients, outputs };
     if (!await_continueback_activity("Silent Payment", summary_msg, 3, true, NULL)) {
         return false;
     }
 
-    // Be explicit that this is not signing, and that the amounts have not been
-    // approved - they cannot be shown at all until the payment is resolved
-    const char* story[] = { "Add your shares without", "signing? Other signers",
-        "must add theirs first.", "Amounts approved later." };
-    return await_yesno_activity("Contribute Shares?", story, 4, false, NULL);
+    // Be explicit that this is not signing. MuSig round 1 previews amounts;
+    // approval still happens during the standard review in round 2.
+    if (is_musig) {
+        const char* story[] = { "Add your shares", "without signing?", "Review next round." };
+        return await_continueback_activity("Contribute Round 1?", story, 3, true, NULL);
+    }
+    const char* story[] = { "Add your shares?", "Share with", "other signers" };
+    return await_yesno_activity("Contribute Shares?", story, 3, true, NULL);
+}
+
+bool show_sp_musig_sign_activity(void)
+{
+    const char* story[] = { "Shares verified.", "Review amounts", "and sign?" };
+    return await_continueback_activity("Round 2", story, 3, true, NULL);
+}
+
+void show_sp_musig_mismatch_activity(void)
+{
+    await_error("Outputs do not match the shares. Not signing.");
+}
+
+void show_sp_musig_changed_activity(void)
+{
+    await_error("Transaction changed between rounds. Not signing.");
+}
+
+void show_sp_musig_expired_activity(void)
+{
+    await_message_2("Signing session expired", "Restart from round 1");
 }
 
 bool show_btc_transaction_outputs_activity(

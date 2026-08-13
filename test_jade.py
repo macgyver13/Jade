@@ -1075,9 +1075,11 @@ HmWPvgD3hiTnD5KZuMkxSUsgGraZ9vavB5JSA3F9s5E4cXuCte5rvBs5N4DjfxYssQk1L82Bq4FE"
                     {'network': 'testnet', 'descriptor_name': 'isgood', 'descriptor': DESCRIPTOR,
                      'datavalues': {'@0': DESCR_SIGNER, '@1': DESCR_SIGNER}}),
                    'Failed to parse descriptor'),
+                  # An empty datavalues map is valid - a musig() or sp() descriptor
+                  # names no signers - so this now fails on the descriptor itself
                   (('baddescr17', 'register_descriptor',
                     {'network': 'testnet', 'descriptor_name': 'too_few', 'descriptor': 'test',
-                     'datavalues': {}}), 'Failed to extract valid parameter values'),
+                     'datavalues': {}}), 'Failed to parse descriptor'),
                   (('baddescr18', 'register_descriptor',
                     {'network': 'testnet', 'descriptor_name': 'too_many', 'descriptor': 'test',
                      'datavalues': {"%15d" % i: "x" * 159 for i in range(16)}}),

@@ -741,19 +741,43 @@ int sign_psbt(jade_process_t* process, CborValue* params, const network_t networ
     sp_summary_t sp_summary;
     sp_result_t sp_result = SP_NONE;
     if (!sp_process_psbt(network_id, psbt, &sp_summary, &sp_result, errmsg)) {
+        if (*errmsg && !strcmp(*errmsg, "Signing session expired")) {
+            show_sp_musig_expired_activity();
+        } else if (*errmsg && !strcmp(*errmsg, "Transaction changed between rounds")) {
+            show_sp_musig_changed_activity();
+        } else if (*errmsg && !strcmp(*errmsg, "Silent payment outputs do not match the shares")) {
+            show_sp_musig_mismatch_activity();
+        }
         return CBOR_RPC_BAD_PARAMETERS;
     }
-    if (sp_result == SP_CONTRIBUTE) {
+    if (sp_result == SP_CONTRIBUTE || sp_result == SP_MUSIG_CONTRIBUTE) {
         // We hold only some of the eligible inputs, so we can add our shares
         // but cannot derive the outputs - and so cannot sign, SIGHASH_ALL
         // committing to outputs that do not exist yet. Confirm what little can
         // be shown, add the shares, and return the psbt for the next signer.
-        if (!show_sp_contribute_activity(&sp_summary)) {
+        const bool is_musig = sp_result == SP_MUSIG_CONTRIBUTE;
+        if (!show_sp_contribute_activity(&sp_summary, is_musig)) {
             *errmsg = "User declined to contribute silent payment shares";
             return CBOR_RPC_USER_CANCELLED;
         }
+        display_processing_message_activity();
         if (!sp_contribute_psbt(network_id, psbt, &sp_result, errmsg)) {
             return CBOR_RPC_BAD_PARAMETERS;
+        }
+        if (is_musig) {
+            bool resolved = true;
+            for (size_t i = 0; i < psbt->num_outputs; ++i) {
+                size_t sp_info_len = 0, script_len = 0;
+                if (wally_psbt_get_output_sp_v0_info_len(psbt, i, &sp_info_len) == WALLY_OK && sp_info_len
+                    && (wally_psbt_get_output_script_len(psbt, i, &script_len) != WALLY_OK || !script_len)) {
+                    resolved = false;
+                    break;
+                }
+            }
+            if (resolved) {
+                await_message_2("Round 1 complete", "Outputs resolved");
+            }
+            return 0;
         }
         if (sp_result == SP_SHARES_ONLY) {
             // Nothing to sign, and nothing more to show the user: the caller
@@ -763,6 +787,10 @@ int sign_psbt(jade_process_t* process, CborValue* params, const network_t networ
         // Our shares completed the coverage, so the outputs are resolved and
         // this signer is also the last one: fall through to the usual flow,
         // where the user approves the amounts and fee before signing.
+    }
+    if (sp_result == SP_MUSIG_SIGN && !show_sp_musig_sign_activity()) {
+        *errmsg = "User declined MuSig2 silent payment round 2";
+        return CBOR_RPC_USER_CANCELLED;
     }
     // Liquid: Optional ELIP-0101 genesis blockhash can override test network defaults.
     // Defers to params_genesis_hash() for validation (only needed for Lisuid/PSET).
@@ -822,6 +850,7 @@ int sign_psbt(jade_process_t* process, CborValue* params, const network_t networ
     // Also, if we are signing this input, inspect the script type and any multisig info
     // For inputs we are signing, record the signature type
     uint8_t* const sig_types = JADE_CALLOC(psbt->num_inputs, sizeof(uint8_t));
+    bool* const musig_inputs = JADE_CALLOC(psbt->num_inputs, sizeof(bool));
     uint64_t input_amount = 0;
     uint8_t signing_flags = 0;
     char wallet_name[NVS_KEY_NAME_MAX_SIZE] = { '\0' };
@@ -1110,16 +1139,25 @@ int sign_psbt(jade_process_t* process, CborValue* params, const network_t networ
     }
 
     // Show warning if nothing to sign
-    if (!signing_flags) {
+    if (!signing_flags && sp_result != SP_MUSIG_SIGN) {
         await_message_2("There are no relevant", "inputs to be signed");
     }
 
     display_processing_message_activity();
 
+    if (sp_result == SP_MUSIG_SIGN && !sp_musig_sign_psbt(network_id, psbt, musig_inputs, errmsg)) {
+        retval = CBOR_RPC_BAD_PARAMETERS;
+        goto cleanup;
+    }
+
     // Sign our inputs
     JADE_WALLY_VERIFY(wally_psbt_signing_cache_enable(psbt, 0));
 
     for (size_t index = 0; index < psbt->num_inputs; ++index) {
+        if (musig_inputs[index]) {
+            JADE_LOGD("MuSig2 input %u was signed by silent payment round 2", index);
+            continue;
+        }
         // See if we flagged this input for signing
         if (!sig_types[index]) {
             JADE_LOGD("Not required to sign input %u", index);
@@ -1180,6 +1218,7 @@ cleanup:
     SENSITIVE_POP(&iter);
     free(descriptor);
     free(multisig_data);
+    free(musig_inputs);
     free(sig_types);
     free(output_info);
 cleanup_tx:

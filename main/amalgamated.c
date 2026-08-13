@@ -73,6 +73,7 @@ void __wrap_abort(void);
 #endif // ESP_PLATFORM
 #include "./main.c"
 #include "./multisig.c"
+#include "./musig_session.c"
 #include "./otpauth.c"
 #include "./power.c"
 #include "./process.c"
