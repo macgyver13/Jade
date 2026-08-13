@@ -432,47 +432,58 @@ bool show_sp_contribute_activity(const sp_summary_t* summary, const bool is_musi
             ret = snprintf(amount, sizeof(amount), "%.08f", 1.0 * summary->recipient_amounts[i] / 1e8);
             JADE_ASSERT(ret > 0 && ret < sizeof(amount));
             if (!show_input_output_activity(
-                    title, false, true, summary->recipients[i], amount, TICKER_BTC, NULL, NULL, NULL)) {
+                    title, false, true, "Output pending", amount, TICKER_BTC, NULL, NULL, NULL)) {
+                return false;
+            }
+            if (!show_confirm_address_activity_ex("Silent Payment", summary->recipients[i], true)) {
                 return false;
             }
         }
     }
 
-    char ours[32], others[32], recipients[32];
+    char inputs[32], recipients[32], outputs[32];
     const size_t num_others = summary->num_inputs_covered + summary->num_inputs_uncovered;
-    int ret = snprintf(ours, sizeof(ours), "Your inputs: %u", summary->num_inputs_ours);
-    JADE_ASSERT(ret > 0 && ret < sizeof(ours));
-    ret = snprintf(others, sizeof(others), "Other inputs: %u", num_others);
-    JADE_ASSERT(ret > 0 && ret < sizeof(others));
+    int ret = num_others
+        ? snprintf(inputs, sizeof(inputs), "Inputs ours/other: %u/%u", summary->num_inputs_ours, num_others)
+        : snprintf(inputs, sizeof(inputs), "Inputs: %u", summary->num_inputs_ours);
+    JADE_ASSERT(ret > 0 && ret < sizeof(inputs));
     ret = snprintf(recipients, sizeof(recipients), "Recipients: %u", summary->num_recipients);
     JADE_ASSERT(ret > 0 && ret < sizeof(recipients));
+    ret = summary->num_other_outputs
+        ? snprintf(outputs, sizeof(outputs), "Change: %u Other: %u", summary->num_change_outputs,
+              summary->num_other_outputs)
+        : snprintf(outputs, sizeof(outputs), "Change: %u", summary->num_change_outputs);
+    JADE_ASSERT(ret > 0 && ret < sizeof(outputs));
 
-    const char* summary_msg[] = { ours, others, recipients };
+    const char* summary_msg[] = { inputs, recipients, outputs };
     if (!await_continueback_activity("Silent Payment", summary_msg, 3, true, NULL)) {
         return false;
     }
 
-    // Be explicit that this is not signing, and that the amounts have not been
-    // approved - they cannot be shown at all until the payment is resolved
+    // Be explicit that this is not signing. MuSig round 1 previews amounts;
+    // approval still happens during the standard review in round 2.
     if (is_musig) {
-        const char* story[] = { "Add your nonce and", "shares without signing?",
-            "You will approve amounts", "in the next round." };
-        return await_yesno_activity("Contribute Round 1?", story, 4, false, NULL);
+        const char* story[] = { "Add your shares", "without signing?", "Review next round." };
+        return await_continueback_activity("Contribute Round 1?", story, 3, false, NULL);
     }
-    const char* story[] = { "Add your shares without", "signing? Other signers",
-        "must add theirs first.", "Amounts approved later." };
-    return await_yesno_activity("Contribute Shares?", story, 4, false, NULL);
+    const char* story[] = { "Add your shares?", "Share with", "other signers" };
+    return await_yesno_activity("Contribute Shares?", story, 3, false, NULL);
 }
 
 bool show_sp_musig_sign_activity(void)
 {
-    const char* story[] = { "Shares verified.", "Outputs match.", "Review amounts and sign?" };
+    const char* story[] = { "Shares verified.", "Review amounts", "and sign?" };
     return await_continueback_activity("Round 2", story, 3, true, NULL);
 }
 
 void show_sp_musig_mismatch_activity(void)
 {
-    await_error_activity("Outputs do not match the shares. Not signing.");
+    await_error("Outputs do not match the shares. Not signing.");
+}
+
+void show_sp_musig_changed_activity(void)
+{
+    await_error("Transaction changed between rounds. Not signing.");
 }
 
 void show_sp_musig_expired_activity(void)
