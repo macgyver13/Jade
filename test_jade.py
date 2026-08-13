@@ -3304,12 +3304,17 @@ def test_silent_payment_sign_psbt(jadeapi):
     outputs = _parse_psbt_maps(jadeapi.sign_psbt(network, _serialize_psbt_maps(*two_sp)))[2]
     derived = [dict(output)[b'\x04'] for output in outputs[:2]]
 
+    # A script on a silent payment output makes it resolved, and BIP375
+    # requires resolved outputs to be unmodifiable, so the flags must be
+    # cleared or the psbt does not parse.
     globals_, inputs, outputs = _duplicate_sp_output(psbt)
+    globals_ = [(key, b'\x00' if key == b'\x06' else value) for key, value in globals_]
     outputs[0].append((b'\x04', derived[0]))
     signed = _parse_psbt_maps(jadeapi.sign_psbt(network, _serialize_psbt_maps(globals_, inputs, outputs)))[2]
     assert [dict(output)[b'\x04'] for output in signed[:2]] == derived
 
     globals_, inputs, outputs = _duplicate_sp_output(psbt)
+    globals_ = [(key, b'\x00' if key == b'\x06' else value) for key, value in globals_]
     outputs[0].append((b'\x04', derived[0][:-1] + bytes([derived[0][-1] ^ 1])))
     try:
         jadeapi.sign_psbt(network, _serialize_psbt_maps(globals_, inputs, outputs))
