@@ -165,9 +165,12 @@ static bool get_data_values(const char* field, const CborValue* value, descripto
     }
 
     size_t num_map_items = 0;
-    if (cbor_value_get_map_length(&result, &num_map_items) != CborNoError || !num_map_items
-        || num_map_items > MAX_ALLOWED_SIGNERS) {
+    if (cbor_value_get_map_length(&result, &num_map_items) != CborNoError || num_map_items > MAX_ALLOWED_SIGNERS) {
         return false;
+    }
+
+    if (!num_map_items) {
+        return true;
     }
 
     CborValue keyItem;
