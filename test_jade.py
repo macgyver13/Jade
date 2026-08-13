@@ -2759,13 +2759,16 @@ def test_silent_payment_sign_psbt(jadeapi):
     except JadeError as err:
         assert err.message == 'Silent payments require SIGHASH_ALL', err.message
 
+    # Stripping the keypath makes the sole eligible input foreign, leaving
+    # Jade with no key to contribute a share with, let alone resolve the
+    # outputs. There is nothing it can usefully do with such a psbt.
     globals_, inputs, outputs = _parse_psbt_maps(psbt)
     inputs[0] = [(key, value) for key, value in inputs[0] if key[:1] != b'\x06']
     try:
         jadeapi.sign_psbt(network, _serialize_psbt_maps(globals_, inputs, outputs))
-        assert False, 'Silent payment PSBT with a foreign eligible input accepted'
+        assert False, 'Silent payment PSBT with only foreign eligible inputs accepted'
     except JadeError as err:
-        expected = 'This silent payment implementation requires ownership of all eligible inputs'
+        expected = "This wallet owns none of the silent payment's eligible inputs"
         assert err.message == expected, err.message
 
     # A proposed script on a silent payment output must be the one Jade
@@ -2776,12 +2779,17 @@ def test_silent_payment_sign_psbt(jadeapi):
     outputs = _parse_psbt_maps(jadeapi.sign_psbt(network, _serialize_psbt_maps(*two_sp)))[2]
     derived = [dict(output)[b'\x04'] for output in outputs[:2]]
 
+    # A script on a silent payment output makes it resolved, and BIP375
+    # requires resolved outputs to be unmodifiable, so the flags must be
+    # cleared or the psbt does not parse.
     globals_, inputs, outputs = _duplicate_sp_output(psbt)
+    globals_ = [(key, b'\x00' if key == b'\x06' else value) for key, value in globals_]
     outputs[0].append((b'\x04', derived[0]))
     signed = _parse_psbt_maps(jadeapi.sign_psbt(network, _serialize_psbt_maps(globals_, inputs, outputs)))[2]
     assert [dict(output)[b'\x04'] for output in signed[:2]] == derived
 
     globals_, inputs, outputs = _duplicate_sp_output(psbt)
+    globals_ = [(key, b'\x00' if key == b'\x06' else value) for key, value in globals_]
     outputs[0].append((b'\x04', derived[0][:-1] + bytes([derived[0][-1] ^ 1])))
     try:
         jadeapi.sign_psbt(network, _serialize_psbt_maps(globals_, inputs, outputs))
