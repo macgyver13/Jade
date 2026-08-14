@@ -426,6 +426,9 @@ void gui_init(TaskHandle_t* gui_h, bool create_event_loop);
 void gui_stop(void);
 bool gui_initialized(void);
 
+// True if called from the gui task itself (which may hold the gui mutex)
+bool gui_is_gui_task(void);
+
 void gui_make_activity_ex(gui_activity_t** ppact, const bool has_status_bar, const char* title, const bool managed);
 gui_activity_t* gui_make_activity(void);
 

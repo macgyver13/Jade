@@ -319,7 +319,7 @@ void gui_stop(void)
 }
 
 bool gui_initialized(void) { return gui_task_handle; }
-static bool gui_is_gui_task(void) { return gui_task_handle && xTaskGetCurrentTaskHandle() == gui_task_handle; }
+bool gui_is_gui_task(void) { return gui_task_handle && xTaskGetCurrentTaskHandle() == gui_task_handle; }
 
 // Is this kind of node selectable?
 static inline bool is_kind_selectable(enum view_node_kind kind) { return kind == BUTTON; }

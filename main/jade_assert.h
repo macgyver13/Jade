@@ -73,7 +73,9 @@ void __wrap_abort(void);
     do {                                                                                                               \
         int attempt = 0;                                                                                               \
         while (xSemaphoreTake(s, 500 / portTICK_PERIOD_MS) != pdTRUE) {                                                \
-            JADE_LOGW("Failed to acquire mutex %p, attempt %u", (void*)s, ++attempt);                                  \
+            TaskHandle_t holder = xSemaphoreGetMutexHolder(s);                                                         \
+            JADE_LOGW("Failed to acquire mutex %p, attempt %u, waiter '%s', holder '%s'", (void*)s, ++attempt,         \
+                pcTaskGetName(NULL), holder ? pcTaskGetName(holder) : "<none>");                                       \
             JADE_ASSERT_MSG(attempt < 10, "Fatal failure to acquire mutex, exhausted retries");                        \
         }                                                                                                              \
         JADE_LOGD("Aquired mutex %p", (void*)s);                                                                       \
