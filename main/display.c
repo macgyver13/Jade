@@ -573,8 +573,8 @@ static inline bool is_within_limits(int cx, int cy)
     // Allow for characters to be printed in the virtual button area
 #ifndef CONFIG_DISPLAY_TOUCHSCREEN
     if ((cx < CONFIG_DISPLAY_OFFSET_X) || (cy < CONFIG_DISPLAY_OFFSET_Y)
-        || (cx > (CONFIG_DISPLAY_WIDTH + CONFIG_DISPLAY_OFFSET_X))
-        || (cy > (CONFIG_DISPLAY_HEIGHT + CONFIG_DISPLAY_OFFSET_Y))) {
+        || (cx >= (CONFIG_DISPLAY_WIDTH + CONFIG_DISPLAY_OFFSET_X))
+        || (cy >= (CONFIG_DISPLAY_HEIGHT + CONFIG_DISPLAY_OFFSET_Y))) {
         return false;
     }
 #endif
@@ -877,7 +877,11 @@ void display_print_in_area(const char* st, int x, int y, dispWin_t areaWin, bool
         } else {
             if (!cfont.x_size) {
                 if (get_char_ptr(ch, &fontChar)) {
-                    tmpw = fontChar.xDelta;
+                    // Fit the glyph on the extent it actually paints (see print_proportional_char),
+                    // not just its advance - an overhanging glyph (eg. 'f') inks past xDelta and
+                    // would otherwise be drawn outside areaWin.
+                    const int ink = fontChar.xOffset + fontChar.width;
+                    tmpw = ink > fontChar.xDelta ? ink : fontChar.xDelta;
                 } else {
                     continue;
                 }

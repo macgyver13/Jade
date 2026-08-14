@@ -17,7 +17,10 @@ void jade_abort(const char* file, const int line_n)
     keychain_clear();
     sensitive_clear_stack();
 
-    if (gui_initialized()) {
+    // NOTE: cannot show the error screen when aborting from the gui task itself, as that task
+    // may hold the gui mutex (eg. asserting mid-render) - taking it again would deadlock, and
+    // we'd hang here instead of aborting/restarting.
+    if (gui_initialized() && !gui_is_gui_task()) {
         char details[128];
         const int ret = snprintf(details, sizeof(details), "%s:%d", file, line_n);
         const char* message[] = { "Internal error", "", "Restarting" };
