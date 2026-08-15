@@ -803,9 +803,24 @@ int sign_psbt(jade_process_t* process, CborValue* params, const network_t networ
             input_amount += utxo->satoshi;
         }
 
+        // A BIP376 silent payment input is unlocked by its spend key plus the
+        // tweak it carries, so it names that key rather than a taproot keypath
+        const bool is_sp_input = sp_is_spend_input(psbt, index);
+        if (is_sp_input && !sp_validate_spend_input(psbt, index, errmsg)) {
+            retval = CBOR_RPC_BAD_PARAMETERS;
+            goto cleanup;
+        }
+
         if (!key_iter_input_begin_public(psbt, index, &iter)) {
             // Our key not present: we are not signing this input
             continue;
+        }
+
+        // The tweak applies to whatever key the psbt names, so check it is
+        // one of ours to spend silent payments with before we sign with it
+        if (is_sp_input && !sp_validate_spend_key_path(network_id, &iter, errmsg)) {
+            retval = CBOR_RPC_BAD_PARAMETERS;
+            goto cleanup;
         }
 
         // Found our key - we are signing this input

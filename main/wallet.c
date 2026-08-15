@@ -484,6 +484,34 @@ bool wallet_is_expected_singlesig_path(const network_t network_id, const script_
     return true;
 }
 
+// The BIP352 spend key beneath a silent payment account, ie. the key that a
+// BIP376 PSBT_IN_SP_SPEND_BIP32_DERIVATION must name for us to sign with it.
+bool wallet_is_expected_sp_spend_path(const network_t network_id, const uint32_t* path, const size_t path_len)
+{
+    JADE_ASSERT(path);
+
+    // purpose'/cointype'/account'/branch'/0
+    if (path_len != SP_EXPORT_PATH_LEN + 2) {
+        return false;
+    }
+
+    uint32_t expected[SP_EXPORT_PATH_LEN];
+    size_t expected_len = 0;
+    wallet_get_default_sp_export_path(network_id, 0, expected, SP_EXPORT_PATH_LEN, &expected_len);
+    JADE_ASSERT(expected_len == SP_EXPORT_PATH_LEN);
+
+    // The account is the caller's to choose, the rest of the prefix is not
+    if (path[0] != expected[0] || path[1] != expected[1]) {
+        return false;
+    }
+
+    if (path[2] < SUBACT_FLOOR || path[2] >= SUBACT_CEILING) {
+        return false;
+    }
+
+    return path[3] == harden(SP_SPEND_KEY_BRANCH) && path[4] == 0;
+}
+
 bool wallet_is_expected_multisig_path(
     const size_t cosigner_index, const bool is_change, const uint32_t* path, size_t path_len)
 {
