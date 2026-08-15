@@ -83,8 +83,13 @@ void wallet_get_default_xpub_export_path(
 
 // bip352 account path - purpose'/cointype'/account'
 #define SP_EXPORT_PATH_LEN 3
+// The scan and spend keys are derived at branch'/0 beneath the account
+#define SP_SCAN_KEY_BRANCH 1
+#define SP_SPEND_KEY_BRANCH 0
 void wallet_get_default_sp_export_path(
     network_t network_id, uint16_t account, uint32_t* path, size_t path_len, size_t* written);
+
+bool wallet_is_expected_sp_spend_path(network_t network_id, const uint32_t* path, size_t path_len);
 
 bool wallet_is_expected_singlesig_path(
     network_t network_id, script_variant_t script_variant, bool is_change, const uint32_t* path, size_t path_len);
