@@ -45,9 +45,6 @@ bool sp_encode_address(const network_t network_id, const uint8_t* sp_v0_info, co
     return ret;
 }
 
-// The BIP352 child paths beneath the account node - m/352'/coin'/account'/x'/0
-#define SP_SCAN_KEY_BRANCH 1
-#define SP_SPEND_KEY_BRANCH 0
 #define SP_KEY_PATH_LEN (SP_EXPORT_PATH_LEN + 2)
 
 // A BIP392 spscan key expression: the scan private key followed by the spend
@@ -149,6 +146,45 @@ cleanup:
     return ret;
 }
 
+bool sp_is_spend_input(const struct wally_psbt* psbt, const size_t index)
+{
+    size_t tweak_len = 0;
+    return wally_psbt_get_input_sp_tweak_len(psbt, index, &tweak_len) == WALLY_OK && tweak_len;
+}
+
+bool sp_validate_spend_input(const struct wally_psbt* psbt, const size_t index, const char** errmsg)
+{
+    JADE_ASSERT(psbt);
+    JADE_ASSERT(errmsg);
+    JADE_ASSERT(sp_is_spend_input(psbt, index));
+
+    // BIP376 only recommends the derivation field, and allows it to name no
+    // path at all. Without one we cannot tell which of our silent payment
+    // accounts the tweak applies to, so refuse rather than sign blindly.
+    size_t num_keypaths = 0;
+    JADE_WALLY_VERIFY(wally_psbt_get_input_sp_spend_keypaths_size(psbt, index, &num_keypaths));
+    if (!num_keypaths) {
+        *errmsg = "Silent payment input missing spend key derivation";
+        return false;
+    }
+    return true;
+}
+
+bool sp_validate_spend_key_path(const network_t network_id, const key_iter* iter, const char** errmsg)
+{
+    JADE_ASSERT(iter);
+    JADE_ASSERT(errmsg);
+
+    uint32_t path[SP_KEY_PATH_LEN];
+    size_t path_len = 0;
+    if (!key_iter_get_path(iter, path, SP_KEY_PATH_LEN, &path_len)
+        || !wallet_is_expected_sp_spend_path(network_id, path, path_len)) {
+        *errmsg = "Unexpected silent payment spend key path";
+        return false;
+    }
+    return true;
+}
+
 // Read the private key of an input this wallet owns.
 // NOTE: we only produce a BIP375 *global* ECDH share, which covers the sum of all
 // eligible inputs - so we must own all of them. Failing to own one is fatal here.
@@ -156,8 +192,8 @@ cleanup:
 // with wally_psbt_input_set_sp_{ecdh_share,dleq_proof}() for the inputs we do
 // own, verify other signers' proofs for the rest, and defer PSBT_OUT_SCRIPT
 // until every eligible input has a share.
-static bool sp_get_input_key(
-    const network_t network_id, const struct wally_psbt* psbt, const size_t index, key_iter* iter, uint8_t* seckey)
+static bool sp_get_input_key(const network_t network_id, const struct wally_psbt* psbt, const size_t index,
+    key_iter* iter, uint8_t* seckey, const char** errmsg)
 {
     const struct wally_tx_output* utxo = NULL;
     size_t script_type = WALLY_SCRIPT_TYPE_UNKNOWN;
@@ -165,6 +201,17 @@ static bool sp_get_input_key(
     if (wally_psbt_get_input_best_utxo(psbt, index, &utxo) != WALLY_OK || !utxo
         || wally_scriptpubkey_get_type(utxo->script, utxo->script_len, &script_type) != WALLY_OK) {
         return false;
+    }
+    if (sp_is_spend_input(psbt, index)) {
+        // A silent payment we received, being spent to make another one. Its
+        // key comes from no path we can check a script against, so wally
+        // verifies it against the output being spent instead.
+        if (!sp_validate_spend_input(psbt, index, errmsg)) {
+            return false;
+        }
+        return key_iter_input_begin(psbt, index, iter) && key_iter_get_num_keys(iter) == 1
+            && sp_validate_spend_key_path(network_id, iter, errmsg)
+            && wally_psbt_get_input_sp_spend_key(psbt, index, &iter->hdkey, seckey, EC_PRIVATE_KEY_LEN) == WALLY_OK;
     }
     if (!key_iter_input_begin(psbt, index, iter) || key_iter_get_num_keys(iter) != 1
         || !get_singlesig_variant_from_script_type(script_type, &script_variant)
@@ -244,8 +291,13 @@ bool sp_process_psbt(const network_t network_id, struct wally_psbt* psbt, const 
             owned_inputs[i] = key_iter_input_begin_public(psbt, i, &iter);
             continue;
         }
-        if (!sp_get_input_key(network_id, psbt, i, &iter, seckeys + (num_seckeys * EC_PRIVATE_KEY_LEN))) {
-            *errmsg = "This silent payment implementation requires ownership of all eligible inputs";
+        // A silent payment input can say specifically why it cannot be signed
+        const char* sp_errmsg = NULL;
+        if (!sp_get_input_key(
+                network_id, psbt, i, &iter, seckeys + (num_seckeys * EC_PRIVATE_KEY_LEN), &sp_errmsg)) {
+            *errmsg = sp_errmsg
+                ? sp_errmsg
+                : "This silent payment implementation requires ownership of all eligible inputs";
             goto cleanup;
         }
         owned_inputs[i] = true;
