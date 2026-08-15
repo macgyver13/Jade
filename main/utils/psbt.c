@@ -52,8 +52,14 @@ static bool key_iter_init(
     // We are a taproot key iterator only if we have taproot keypaths
     if (is_input) {
         iter->is_taproot = psbt->inputs[index].taproot_leaf_paths.num_items != 0;
+        // A BIP376 silent payment input has neither kind of keypath: the key
+        // that unlocks it is the spend key its own keypaths name, tweaked by
+        // PSBT_IN_SP_TWEAK, which wally applies when the input is signed
+        size_t tweak_len = 0;
+        iter->is_sp = wally_psbt_get_input_sp_tweak_len(psbt, index, &tweak_len) == WALLY_OK && tweak_len;
     } else {
         iter->is_taproot = psbt->outputs[index].taproot_leaf_paths.num_items != 0;
+        iter->is_sp = false;
     }
     iter->is_valid = true;
     return key_iter_next(iter);
@@ -79,6 +85,9 @@ static const struct wally_map* key_iter_get_keypaths(const key_iter* iter)
     JADE_ASSERT(iter && iter->is_valid);
     if (iter->is_input) {
         const struct wally_psbt_input* input = &iter->psbt->inputs[iter->index];
+        if (iter->is_sp) {
+            return &input->sp_spend_keypaths;
+        }
         return iter->is_taproot ? &input->taproot_leaf_paths : &input->keypaths;
     }
     const struct wally_psbt_output* output = &iter->psbt->outputs[iter->index];
@@ -120,8 +129,9 @@ bool key_iter_next(key_iter* iter)
     const struct wally_map* keypaths = key_iter_get_keypaths(iter);
     size_t found_index;
     ++iter->key_index;
-    if (iter->is_taproot && !iter->key_index) {
-        // First iteration: validate
+    if ((iter->is_taproot || iter->is_sp) && !iter->key_index) {
+        // First iteration: validate. A silent payment output is a p2tr output,
+        // so it must pass the same single-key keypath-only checks
         iter->is_valid = key_iter_is_supported_taproot(iter, keypaths);
     }
     if (iter->is_valid) {
