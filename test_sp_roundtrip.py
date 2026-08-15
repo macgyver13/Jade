@@ -8,6 +8,7 @@ Closes the loop between the two silent payment features:
   3. Have Jade resolve and sign it
   4. Verify the signatures and the BIP-375 share it wrote
   5. Scan the extracted transaction as the recipient and find the payment
+  6. Spend the payment back out, with the tweak the scan found (BIP-376)
 
 Nothing here reimplements BIP-352: the recipient side is the secp256k1
 silentpayments scanner and the BIP-392 codecs in libwally, driven through the
@@ -21,9 +22,6 @@ Run against the emulator with:
 The vendored libwally must be built for the host, ie. run ./configure and
 make in components/libwally-core/upstream. Set JADE_WALLY_DIR to use another
 build.
-
-TODO: the round trip stops at receiving. Spending the payment back needs the
-tweaked spend key b_spend + t_k, which arrives with BIP-376 support.
 """
 import argparse
 import os
@@ -35,14 +33,21 @@ WALLY_DIR = os.environ.get('JADE_WALLY_DIR',
 
 HARDENED = 0x80000000
 BIP84_PURPOSE = 84 | HARDENED
+BIP352_PURPOSE = 352 | HARDENED
+SP_SPEND_BRANCH = 0
 BIP32_FLAG_KEY_PUBLIC = 0x1
 WALLY_PSBT_EXTRACT_NON_FINAL = 0x1
 EC_FLAG_ECDSA = 0x1
+EC_FLAG_SCHNORR = 0x2
 DLEQ_PROOF_LEN = 64
 # TEST_MNEMONIC_SINGLE_SIG from test_jade.py
 TEST_MNEMONIC = ('paddle puppy easily actor poet apart screen '
                  'drastic city front predict damp')
 INPUT_AMOUNT, SP_AMOUNT, CHANGE_AMOUNT = 100000, 120000, 75000
+SPEND_AMOUNT = 110000  # Spending the payment back out again
+# Errors Jade reports for a silent payment input it will not sign, from
+# main/silentpayments.c and the signing loop in main/process/sign_psbt.c
+SP_NO_DERIVATION_ERROR = 'Silent payment input missing spend key derivation'
 FUNDING_TXID = bytes([0x5b] * 32)
 
 # Networks Jade knows, and their bip32 coin type
@@ -90,31 +95,40 @@ def parse_descriptor(descriptor):
     return key[key.index(']') + 1:] if ']' in key else key
 
 
-def get_recipient(jade, sp, network, account):
+def get_recipient(jade, sp, network, account, fingerprint):
     """Fetch Jade's silent payment descriptor as a recipient to pay."""
     descriptor = jade.get_silent_payment_descriptor(network, account)
     scan_privkey, spend_pubkey = sp.decode_sp_scan_key(parse_descriptor(descriptor))
     scan_pubkey = sp.pubkey_from_privkey(scan_privkey)
     hrp = 'sp' if network == 'mainnet' else 'tsp'
+    # BIP-376 names the spend key by its origin, which is where the descriptor
+    # says the account is, plus the BIP-352 spend branch
+    spend_path = [BIP352_PURPOSE, COIN_TYPES[network], account | HARDENED,
+                  SP_SPEND_BRANCH | HARDENED, 0]
     return {'descriptor': descriptor,
             'scan_privkey': scan_privkey,
             'scan_pubkey': scan_pubkey,
             'spend_pubkey': spend_pubkey,
+            'spend_key': {'pubkey': spend_pubkey, 'fingerprint': fingerprint,
+                          'path': spend_path},
             'info': scan_pubkey + spend_pubkey,
             'address': sp.sp_address(scan_pubkey + spend_pubkey, hrp)}
 
 
-def get_wallet_keys(jade, sp, network, num_inputs):
+def get_fingerprint(jade, sp, network):
+    """Jade's master key fingerprint, which every key origin starts with."""
+    master = sp.ext_key()
+    assert sp.bip32_key_from_base58(jade.get_xpub(network, []).encode(),
+                                    sp.byref(master)) == sp.WALLY_OK
+    return bytes(master.hash160)[:4]
+
+
+def get_wallet_keys(jade, sp, network, num_inputs, fingerprint):
     """Derive the p2wpkh keys Jade will recognise as its own.
 
     Everything comes from Jade itself: the master fingerprint from the master
     xpub, the receive keys from the account xpub. The seed is never needed.
     """
-    master = sp.ext_key()
-    assert sp.bip32_key_from_base58(jade.get_xpub(network, []).encode(),
-                                    sp.byref(master)) == sp.WALLY_OK
-    fingerprint = bytes(master.hash160)[:4]
-
     path = [BIP84_PURPOSE, COIN_TYPES[network], 0 | HARDENED]
     account = sp.ext_key()
     assert sp.bip32_key_from_base58(jade.get_xpub(network, path).encode(),
@@ -268,6 +282,105 @@ def scan_as_recipient(sp, tx, recipient, num_inputs, outpoint):
     return found, pubkeys, scripts
 
 
+def build_spend_psbt(sp, recipient, script, txid, tweak, change, spend_keypath=True):
+    """Build a PSBTv2 spending a received silent payment (BIP-376).
+
+    The input is a p2tr output with no keypath Jade could recognise: what
+    identifies it is the tweak, and the spend key that the tweak applies to.
+    """
+    psbt = sp.pointer(sp.wally_psbt())
+    assert sp.wally_psbt_init_alloc(sp.WALLY_PSBT_VERSION_2, 1, 1, 0, 0, psbt) == sp.WALLY_OK
+
+    tx_input = sp.pointer(sp.wally_tx_input())
+    assert sp.wally_tx_input_init_alloc(txid, len(txid), 0, 0xffffffff, None, 0, None,
+                                        tx_input) == sp.WALLY_OK
+    assert sp.wally_psbt_add_tx_input_at(psbt, 0, 0, tx_input) == sp.WALLY_OK
+    utxo = sp.pointer(sp.wally_tx_output())
+    assert sp.wally_tx_output_init_alloc(SP_AMOUNT, script, len(script), utxo) == sp.WALLY_OK
+    assert sp.wally_psbt_set_input_witness_utxo(psbt, 0, utxo) == sp.WALLY_OK
+    assert sp.wally_psbt_set_input_amount(psbt, 0, SP_AMOUNT) == sp.WALLY_OK
+    assert sp.wally_psbt_set_input_sp_tweak(psbt, 0, tweak, len(tweak)) == sp.WALLY_OK
+    if spend_keypath:
+        add_keypath(sp, psbt, 0, recipient['spend_key'],
+                    sp.wally_psbt_add_input_sp_spend_keypath)
+
+    tx_output = sp.pointer(sp.wally_tx_output())
+    assert sp.wally_tx_output_init_alloc(SPEND_AMOUNT, change['script'], len(change['script']),
+                                         tx_output) == sp.WALLY_OK
+    assert sp.wally_psbt_add_tx_output_at(psbt, 0, 0, tx_output) == sp.WALLY_OK
+    assert sp.wally_psbt_set_output_amount(psbt, 0, SPEND_AMOUNT) == sp.WALLY_OK
+    add_keypath(sp, psbt, 0, change, sp.wally_psbt_add_output_keypath)
+
+    buf, buf_len = sp.make_cbuffer('00' * 4096)
+    ret, written = sp.wally_psbt_to_bytes(psbt, 0, buf, buf_len)
+    assert ret == sp.WALLY_OK
+    sp.wally_psbt_free(psbt)
+    return bytes(buf[:written])
+
+
+def verify_spend(sp, signed, output_key):
+    """Check that Jade signed the silent payment input as BIP-376 requires."""
+    psbt = sp.POINTER(sp.wally_psbt)()
+    assert sp.wally_psbt_from_bytes(signed, len(signed), 0, sp.byref(psbt)) == sp.WALLY_OK
+
+    # The signature goes in PSBT_IN_TAP_KEY_SIG, and verifies against the
+    # output key directly: BIP-376 applies no further taproot tweak
+    sig, sig_len = sp.make_cbuffer('00' * 64)
+    ret, written = sp.wally_psbt_get_input_taproot_signature(psbt, 0, sig, sig_len)
+    assert (ret, written) == (sp.WALLY_OK, 64), 'silent payment input was not signed'
+
+    unsigned = sp.POINTER(sp.wally_tx)()
+    assert sp.wally_psbt_extract(psbt, WALLY_PSBT_EXTRACT_NON_FINAL,
+                                 sp.byref(unsigned)) == sp.WALLY_OK
+    txhash, _ = sp.make_cbuffer('00' * 32)
+    assert sp.wally_psbt_get_input_signature_hash(psbt, 0, unsigned, None, 0, 0,
+                                                  txhash, 32) == sp.WALLY_OK
+    assert sp.wally_ec_sig_verify(output_key, len(output_key), txhash, 32, EC_FLAG_SCHNORR,
+                                  sig, sig_len) == sp.WALLY_OK, 'signature invalid'
+    sp.wally_tx_free(unsigned)
+
+    assert sp.wally_psbt_finalize(psbt, 0) == sp.WALLY_OK
+    tx = sp.POINTER(sp.wally_tx)()
+    assert sp.wally_psbt_extract(psbt, sp.WALLY_PSBT_EXTRACT_OPT_FINAL,
+                                 sp.byref(tx)) == sp.WALLY_OK
+    sp.wally_tx_free(tx)
+    sp.wally_psbt_free(psbt)
+
+
+def assert_rejected(jade, network, psbt, expected):
+    """A PSBT Jade must refuse to sign, for the reason we expect."""
+    from jadepy.jade_error import JadeError
+    try:
+        jade.sign_psbt(network, psbt)
+    except JadeError as e:
+        assert e.message == expected, f'rejected with "{e.message}", expected "{expected}"'
+        return e.message
+    assert False, f'Jade signed a psbt it should have rejected: {expected}'
+
+
+def spend_the_payment(jade, sp, network, recipient, tx, script, tweak, change, log):
+    """Spend the silent payment Jade just received, per BIP-376."""
+    txid, txid_len = sp.make_cbuffer('00' * 32)
+    assert sp.wally_tx_get_txid(tx, txid, txid_len) == sp.WALLY_OK
+    txid = bytes(txid)
+
+    # A tweak that does not give the key being spent must not be signed with:
+    # it would be a valid signature for a key Jade does not control
+    bad = bytes([tweak[0] ^ 1]) + tweak[1:]
+    psbt = build_spend_psbt(sp, recipient, script, txid, bad, change)
+    log(f'Rejected: {assert_rejected(jade, network, psbt, "Failed to generate signature")}')
+
+    # Without the derivation there is no way to know which key to tweak
+    psbt = build_spend_psbt(sp, recipient, script, txid, tweak, change,
+                            spend_keypath=False)
+    log(f'Rejected: {assert_rejected(jade, network, psbt, SP_NO_DERIVATION_ERROR)}')
+
+    psbt = build_spend_psbt(sp, recipient, script, txid, tweak, change)
+    signed = bytes(jade.sign_psbt(network, psbt))
+    verify_spend(sp, signed, script[2:])
+    log('Jade spent the payment with the scanned tweak')
+
+
 def run_roundtrip(jade, network='localtest', account=0, num_inputs=2, verbose=True):
     """Pay Jade's own silent payment address, have it sign, then find the payment."""
     sp = load_wally()
@@ -277,11 +390,12 @@ def run_roundtrip(jade, network='localtest', account=0, num_inputs=2, verbose=Tr
         if verbose:
             print(message)
 
-    recipient = get_recipient(jade, sp, network, account)
+    fingerprint = get_fingerprint(jade, sp, network)
+    recipient = get_recipient(jade, sp, network, account, fingerprint)
     log(f'Descriptor: {recipient["descriptor"]}')
     log(f'Pay to:     {recipient["address"]}')
 
-    inputs, change = get_wallet_keys(jade, sp, network, num_inputs)
+    inputs, change = get_wallet_keys(jade, sp, network, num_inputs, fingerprint)
     psbt = build_psbt(sp, inputs, change, recipient['info'])
     log(f'PSBT built with {num_inputs} inputs, a silent payment and change ({len(psbt)} bytes)')
 
@@ -300,6 +414,9 @@ def run_roundtrip(jade, network='localtest', account=0, num_inputs=2, verbose=Tr
     summed = sp.pubkey_sum(pubkeys)
     assert sp.dleq_verify(proof, summed, recipient['scan_pubkey'], share), 'DLEQ proof invalid'
     log('DLEQ proof verified against the summed input keys')
+
+    # Close the loop: spend the payment back out again (BIP-376)
+    spend_the_payment(jade, sp, network, recipient, tx, scripts[0], found[0], change, log)
 
     sp.wally_tx_free(tx)
     return {'psbt': psbt, 'signed': signed, 'recipient': recipient, 'script': scripts[0]}
