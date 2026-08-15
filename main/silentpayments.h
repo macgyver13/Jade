@@ -7,6 +7,7 @@
 
 #include "jade_assert.h"
 #include "utils/network.h"
+#include "utils/psbt.h"
 
 #include <wally_address.h>
 
@@ -23,6 +24,24 @@ struct wally_psbt;
  * shares and proofs, is not implemented.
  */
 WARN_UNUSED_RESULT bool sp_process_psbt(network_t network_id, struct wally_psbt* psbt, const char** errmsg);
+
+/** Returns true if the input is a BIP376 silent payment spend, ie. it carries
+ * a tweak to apply to the silent payment spend key that unlocks it.
+ */
+bool sp_is_spend_input(const struct wally_psbt* psbt, size_t index);
+
+/** Check that a silent payment input says enough for us to sign it.
+ *
+ * Only call for an input where `sp_is_spend_input()` is true.
+ */
+WARN_UNUSED_RESULT bool sp_validate_spend_input(const struct wally_psbt* psbt, size_t index, const char** errmsg);
+
+/** Check that the spend key an iterator matched is a silent payment spend key.
+ *
+ * The tweak is applied to whichever key the psbt names, so the path it was
+ * derived at must be one we would use for silent payments.
+ */
+WARN_UNUSED_RESULT bool sp_validate_spend_key_path(network_t network_id, const key_iter* iter, const char** errmsg);
 
 /** Encode a BIP352 v0 address from a PSBT_OUT_SP_V0_INFO value. */
 WARN_UNUSED_RESULT bool sp_encode_address(
