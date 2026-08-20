@@ -2702,6 +2702,28 @@ def _serialize_psbt_maps(globals_, inputs, outputs):
     return b'psbt\xff' + b''.join(_write_psbt_map(fields) for fields in maps)
 
 
+def _duplicate_sp_output(psbt):
+    """Add a second silent payment output paying the same address as the first.
+
+    The copy is placed alongside the original so the silent payment outputs are
+    outputs 0 and 1. Both share a scan and spend key, which BIP375 orders by
+    output index. The copy is paid for out of the change, so the fee is unchanged.
+    """
+    globals_, inputs, outputs = _parse_psbt_maps(psbt)
+    duplicate = list(outputs[0])
+    amount = int.from_bytes(dict(duplicate)[b'\x03'], 'little')
+    assert dict(outputs[1]).get(b'\x09') is None, 'Second output is not the change'
+
+    change = int.from_bytes(dict(outputs[1])[b'\x03'], 'little') - amount
+    outputs[1] = [(key, change.to_bytes(8, 'little') if key == b'\x03' else value)
+                  for key, value in outputs[1]]
+    outputs.insert(1, duplicate)
+
+    count = _write_compact_size(len(outputs))
+    globals_ = [(key, count if key == b'\x05' else value) for key, value in globals_]
+    return globals_, inputs, outputs
+
+
 def _check_silent_payment_psbt(psbt, silent_payment_info):
     globals_, inputs, outputs = _parse_psbt_maps(psbt)
     globals_by_key = dict(globals_)
@@ -2728,6 +2750,48 @@ def test_silent_payment_roundtrip(jadeapi, network='localtest'):
         logger.warning('Skipping silent payment round trip - no libwally host build')
         return
     test_sp_roundtrip.run_roundtrip(jadeapi, network, verbose=False)
+
+
+def test_silent_payment_collaborative_roundtrip(jadeapi, network='localtest'):
+    """Contribute a share for one input of two, then sign once the other signer's
+    share has resolved the outputs.
+
+    Skipped unless the vendored libwally has been built for the host, and unless
+    Settings > Wallet > Silent Payments > Collaborative is On - the setting is
+    held in nvs and there is no rpc to switch it on from here.
+    """
+    if not test_sp_roundtrip.load_wally():
+        logger.warning('Skipping collaborative silent payment round trip'
+                       ' - no libwally host build')
+        return
+    try:
+        test_sp_roundtrip.run_collaborative_roundtrip(jadeapi, network, verbose=False)
+    except JadeError as err:
+        if not err.message.startswith('Collaborative silent payments are disabled'):
+            raise
+        logger.warning('Skipping collaborative silent payment round trip'
+                       ' - Collaborative is Off in Settings')
+
+
+def test_silent_payment_musig_roundtrip(jadeapi, network='localtest'):
+    """Sign a MuSig2 silent payment input across both rounds, then the refusals.
+
+    The other participant is played by the test, so no second device is needed.
+    Jade keeps its secnonce in RAM between the rounds, so this must not
+    reconnect part way through.
+
+    Skipped unless the vendored libwally has been built for the host.
+    """
+    if not test_sp_roundtrip.load_wally():
+        logger.warning('Skipping MuSig2 silent payment flow - no libwally host build')
+        return
+    try:
+        test_sp_roundtrip.run_musig_flow(jadeapi, network, verbose=False)
+    except JadeError as err:
+        if not err.message.startswith('Collaborative silent payments are disabled'):
+            raise
+        logger.warning('Skipping MuSig2 silent payment flow'
+                       ' - Collaborative is Off in Settings')
 
 
 def test_silent_payment_sign_psbt(jadeapi):
@@ -2787,7 +2851,8 @@ def test_silent_payment_sign_psbt(jadeapi):
     globals_, inputs, outputs = _duplicate_sp_output(psbt)
     globals_ = [(key, b'\x00' if key == b'\x06' else value) for key, value in globals_]
     outputs[0].append((b'\x04', derived[0]))
-    signed = _parse_psbt_maps(jadeapi.sign_psbt(network, _serialize_psbt_maps(globals_, inputs, outputs)))[2]
+    signed = jadeapi.sign_psbt(network, _serialize_psbt_maps(globals_, inputs, outputs))
+    signed = _parse_psbt_maps(signed)[2]
     assert [dict(output)[b'\x04'] for output in signed[:2]] == derived
 
     globals_, inputs, outputs = _duplicate_sp_output(psbt)
@@ -2797,7 +2862,8 @@ def test_silent_payment_sign_psbt(jadeapi):
         jadeapi.sign_psbt(network, _serialize_psbt_maps(globals_, inputs, outputs))
         assert False, 'Silent payment psbt with a mismatching proposed script accepted'
     except JadeError as err:
-        assert err.message == 'Failed to derive silent payment outputs', err.message
+        expected = 'Failed to derive silent payment outputs, or a proposed script did not match'
+        assert err.message == expected, err.message
 
     # An output script on every silent payment output makes the psbt claim to
     # be resolved, which BIP375 requires ECDH shares to accompany. It has none.
@@ -3407,6 +3473,8 @@ def run_api_tests(jadeapi, isble, qemu, authuser=False):
     test_silent_payment_sign_psbt(jadeapi)
     if not args.json_filter:
         test_silent_payment_roundtrip(jadeapi)
+        test_silent_payment_collaborative_roundtrip(jadeapi)
+        test_silent_payment_musig_roundtrip(jadeapi)
     # Singlesig Liquid (PSET) tests
     test_sign_psbt(jadeapi, SIGN_PSET_SS_TESTS, has_psram)
 
