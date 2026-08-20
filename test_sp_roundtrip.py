@@ -542,6 +542,408 @@ def run_collaborative_roundtrip(jade, network='localtest', account=0, verbose=Tr
     return {'signed': signed, 'recipient': recipient, 'script': bytes(script)}
 
 
+
+# --- MuSig2 silent payments -------------------------------------------------
+# Jade signs a form-(b) MuSig2 input across two rounds, holding its secnonce in
+# RAM between them. The other participant is played here, so the whole protocol
+# runs without a second device.
+
+MUSIG_ORIGIN = [48 | HARDENED, 1 | HARDENED, 0 | HARDENED, 3 | HARDENED]
+MUSIG_BRANCH, MUSIG_INDEX = 0, 0
+MUSIG_DESCRIPTOR_NAME = 'spmusig'
+COSIGNER_SEED = '22' * 64
+BIP32_VER_MAIN_PUBLIC = 0x0488B21E
+BIP32_FLAG_KEY_PRIVATE = 0x0
+SHA256_LEN = 32
+MUSIG_AMOUNT, MUSIG_SP_AMOUNT = 100000, 90000
+# Errors Jade reports between the two rounds, from main/silentpayments.c
+MUSIG_EXPIRED_ERROR = 'Signing session expired'
+MUSIG_CHANGED_ERROR = 'Transaction changed between rounds'
+MUSIG_UNRESOLVED_ERROR = 'Silent payment outputs do not match the shares'
+WALLY_SP_INCOMPLETE, WALLY_SP_COMPLETE = 1, 2
+
+
+def derive_key(sp, key, path, flags):
+    """Derive a child of an ext_key down a full path."""
+    values = (sp.c_uint32 * len(path))(*path)
+    child = sp.POINTER(sp.ext_key)()
+    assert sp.bip32_key_from_parent_path_alloc(key, values, len(path), flags,
+                                               sp.byref(child)) == sp.WALLY_OK
+    return child
+
+
+def key_fingerprint(sp, key):
+    result = (sp.c_ubyte * 4)()
+    assert sp.bip32_key_get_fingerprint(key, result, 4) == sp.WALLY_OK
+    return bytes(result)
+
+
+def cosigner_account(sp):
+    """The other participant, whose keys this test holds."""
+    seed, seed_len = sp.make_cbuffer(COSIGNER_SEED)
+    master = sp.POINTER(sp.ext_key)()
+    assert sp.bip32_key_from_seed_alloc(seed, seed_len, sp.BIP32_VER_MAIN_PRIVATE, 0,
+                                        sp.byref(master)) == sp.WALLY_OK
+    return master, derive_key(sp, master, MUSIG_ORIGIN, BIP32_FLAG_KEY_PRIVATE)
+
+
+def key_expression(sp, xpub, fingerprint):
+    origin = '/'.join(f'{value & ~HARDENED}h' for value in MUSIG_ORIGIN)
+    return f'[{fingerprint.hex()}/{origin}]{xpub}'
+
+
+def musig_descriptor(sp, expressions):
+    """tr(musig(...)/<0;1>/*), the aggregate-then-derive form Jade registers."""
+    descriptor = f'tr(musig({",".join(sorted(expressions))})/<0;1>/*)'
+    parsed = sp.c_void_p()
+    assert sp.wally_descriptor_parse(descriptor.encode(), None, 0, 0,
+                                     sp.byref(parsed)) == sp.WALLY_OK
+    ret, checksum = sp.wally_descriptor_get_checksum(parsed, 0)
+    sp.wally_descriptor_free(parsed)
+    assert ret == sp.WALLY_OK
+    if isinstance(checksum, bytes):
+        checksum = checksum.decode()
+    return f'{descriptor}#{checksum}'
+
+
+def musig_setup(jade, sp, network):
+    """Register a two-of-two MuSig2 descriptor with Jade and derive its script.
+
+    Returns everything both signers need: the sorted participant pubkeys, the
+    aggregate, the synthetic derivation Jade checks the input against, and the
+    scriptPubKey the descriptor produces at MUSIG_BRANCH/MUSIG_INDEX.
+    """
+    jade_fingerprint = get_fingerprint(jade, sp, network)
+    jade_xpub = jade.get_xpub(network, MUSIG_ORIGIN)
+    jade_account = sp.ext_key()
+    assert sp.bip32_key_from_base58(jade_xpub.encode(),
+                                    sp.byref(jade_account)) == sp.WALLY_OK
+    jade_pubkey = bytes(jade_account.pub_key)
+
+    cosigner_master, cosigner = cosigner_account(sp)
+    cosigner_fingerprint = key_fingerprint(sp, cosigner_master)
+    cosigner_pubkey = bytes(cosigner.contents.pub_key)
+    ret, cosigner_xpub = sp.bip32_key_to_base58(cosigner, BIP32_FLAG_KEY_PUBLIC)
+    assert ret == sp.WALLY_OK
+
+    descriptor = musig_descriptor(sp, [
+        key_expression(sp, jade_xpub, jade_fingerprint),
+        key_expression(sp, cosigner_xpub, cosigner_fingerprint)])
+    assert jade.register_descriptor(network, MUSIG_DESCRIPTOR_NAME, descriptor, {})
+
+    participants = b''.join(sorted([jade_pubkey, cosigner_pubkey]))
+    cache = sp.c_void_p()
+    assert sp.wally_musig_pubkey_agg(participants, len(participants), None, 0,
+                                     sp.byref(cache)) == sp.WALLY_OK
+    buf, buf_len = sp.make_cbuffer('00' * 33)
+    assert sp.wally_musig_pubkey_get(cache, buf, buf_len) == sp.WALLY_OK
+    aggregate = bytes(buf)
+    sp.wally_musig_keyagg_cache_free(cache)
+
+    # The aggregate is derived, not the participants, so the taproot internal
+    # key comes from the synthetic xpub the aggregate makes
+    synthetic = sp.POINTER(sp.ext_key)()
+    assert sp.wally_musig_pubkey_to_xpub(aggregate, len(aggregate), BIP32_VER_MAIN_PUBLIC,
+                                         sp.byref(synthetic)) == sp.WALLY_OK
+    internal = derive_key(sp, synthetic, [MUSIG_BRANCH, MUSIG_INDEX], BIP32_FLAG_KEY_PUBLIC)
+    internal_key = bytes(internal.contents.pub_key)
+
+    tweaked, tweaked_len = sp.make_cbuffer('00' * 33)
+    assert sp.wally_ec_public_key_bip341_tweak(internal_key, len(internal_key), None, 0,
+                                               0, tweaked, tweaked_len) == sp.WALLY_OK
+
+    return {'descriptor': descriptor,
+            'participants': participants,
+            'aggregate': aggregate,
+            'internal_key': internal_key[1:],
+            'script': b'\x51\x20' + bytes(tweaked)[1:],
+            'synthetic_fingerprint': key_fingerprint(sp, synthetic),
+            'jade': {'pubkey': jade_pubkey, 'fingerprint': jade_fingerprint},
+            'cosigner': {'seckey': bytes(cosigner.contents.priv_key)[1:],
+                         'pubkey': cosigner_pubkey}}
+
+
+def build_musig_psbt(sp, setup, recipient_info, amount=MUSIG_SP_AMOUNT):
+    """Build a PSBTv2 spending the MuSig2 output to a silent payment.
+
+    The input carries what Jade needs to bind it to the registered descriptor:
+    the participant list, the synthetic derivation of the aggregate, and its own
+    key origin.
+    """
+    psbt = sp.pointer(sp.wally_psbt())
+    assert sp.wally_psbt_init_alloc(sp.WALLY_PSBT_VERSION_2, 1, 1, 0, 0,
+                                    psbt) == sp.WALLY_OK
+
+    tx_input = sp.pointer(sp.wally_tx_input())
+    assert sp.wally_tx_input_init_alloc(FUNDING_TXID, len(FUNDING_TXID), 0, 0xffffffff,
+                                        None, 0, None, tx_input) == sp.WALLY_OK
+    assert sp.wally_psbt_add_tx_input_at(psbt, 0, 0, tx_input) == sp.WALLY_OK
+
+    utxo = sp.pointer(sp.wally_tx_output())
+    assert sp.wally_tx_output_init_alloc(MUSIG_AMOUNT, setup['script'], len(setup['script']),
+                                         utxo) == sp.WALLY_OK
+    assert sp.wally_psbt_set_input_witness_utxo(psbt, 0, utxo) == sp.WALLY_OK
+    assert sp.wally_psbt_set_input_amount(psbt, 0, MUSIG_AMOUNT) == sp.WALLY_OK
+    assert sp.wally_psbt_set_input_sighash(psbt, 0, sp.WALLY_SIGHASH_ALL) == sp.WALLY_OK
+    assert sp.wally_psbt_set_input_taproot_internal_key(
+        psbt, 0, setup['internal_key'], len(setup['internal_key'])) == sp.WALLY_OK
+    assert sp.wally_psbt_input_add_musig2_participant_pubkeys(
+        psbt.contents.inputs, setup['aggregate'], len(setup['aggregate']),
+        setup['participants'], len(setup['participants'])) == sp.WALLY_OK
+
+    add_taproot_keypath(sp, psbt, setup['internal_key'], setup['synthetic_fingerprint'],
+                        [MUSIG_BRANCH, MUSIG_INDEX])
+    add_taproot_keypath(sp, psbt, setup['jade']['pubkey'][1:], setup['jade']['fingerprint'],
+                        MUSIG_ORIGIN)
+
+    tx_output = sp.pointer(sp.wally_tx_output())
+    assert sp.wally_tx_output_init_alloc(amount, None, 0, tx_output) == sp.WALLY_OK
+    assert sp.wally_psbt_add_tx_output_at(psbt, 0, 0, tx_output) == sp.WALLY_OK
+    assert sp.wally_psbt_set_output_amount(psbt, 0, amount) == sp.WALLY_OK
+    assert sp.wally_psbt_set_output_sp_v0_info(psbt, 0, recipient_info,
+                                               len(recipient_info)) == sp.WALLY_OK
+    return serialize_psbt(sp, psbt, free=True)
+
+
+def add_taproot_keypath(sp, psbt, pubkey, fingerprint, path):
+    values = (sp.c_uint32 * len(path))(*path)
+    assert sp.wally_psbt_add_input_taproot_keypath(
+        psbt, 0, 0, pubkey, len(pubkey), None, 0, fingerprint, len(fingerprint),
+        values, len(path)) == sp.WALLY_OK
+
+
+def serialize_psbt(sp, psbt, free=False):
+    buf, buf_len = sp.make_cbuffer('00' * 8192)
+    ret, written = sp.wally_psbt_to_bytes(psbt, 0, buf, buf_len)
+    assert ret == sp.WALLY_OK
+    if free:
+        sp.wally_psbt_free(psbt)
+    return bytes(buf[:written])
+
+
+def parse_psbt(sp, data):
+    psbt = sp.POINTER(sp.wally_psbt)()
+    assert sp.wally_psbt_from_bytes(data, len(data), 0, sp.byref(psbt)) == sp.WALLY_OK
+    return psbt
+
+
+def sp_output_scripts(sp, psbt):
+    scripts = []
+    for index in range(psbt.contents.num_outputs):
+        ret, info_len = sp.wally_psbt_get_output_sp_v0_info_len(psbt, index)
+        if ret == sp.WALLY_OK and info_len:
+            ret, script_len = sp.wally_psbt_get_output_script_len(psbt, index)
+            assert ret == sp.WALLY_OK
+            scripts.append(script_len)
+    assert scripts, 'PSBT has no silent-payment outputs'
+    return scripts
+
+
+def snapshot(sp, data):
+    psbt = parse_psbt(sp, data)
+    inputs = []
+    for index in range(psbt.contents.num_inputs):
+        item = psbt.contents.inputs[index]
+        if item.musig2_pubkeys.num_items:
+            ret, tap_sig_len = sp.wally_psbt_get_input_taproot_signature_len(psbt, index)
+            assert ret == sp.WALLY_OK
+            inputs.append({
+                'index': index,
+                'shares': item.sp_partial_ecdh_shares.num_items,
+                'proofs': item.sp_partial_dleq_proofs.num_items,
+                'pubnonces': item.musig2_pubnonces.num_items,
+                'partials': item.musig2_partial_sigs.num_items,
+                'tap_sig_len': tap_sig_len,
+            })
+    result = {
+        'inputs': inputs,
+        'scripts': sp_output_scripts(sp, psbt),
+        'modifiable': psbt.contents.tx_modifiable_flags,
+    }
+    sp.wally_psbt_free(psbt)
+    assert inputs, 'PSBT has no MuSig2 inputs'
+    return result
+
+
+def check_round1(before, after, expected):
+    assert len(after['inputs']) == len(before['inputs'])
+    for old, new in zip(before['inputs'], after['inputs']):
+        assert new['index'] == old['index']
+        assert new['shares'] > old['shares'], f'input {new["index"]}: no ECDH share added'
+        assert new['proofs'] > old['proofs'], f'input {new["index"]}: no DLEQ proof added'
+        assert new['pubnonces'] == old['pubnonces'] + 1, \
+            f'input {new["index"]}: expected exactly one Jade pubnonce'
+        assert new['partials'] == old['partials'], f'input {new["index"]}: signed during round 1'
+        assert new['tap_sig_len'] == 0, \
+            f'input {new["index"]}: taproot signature present in round 1'
+    if expected == 'incomplete':
+        assert not any(after['scripts']), 'D2 failed: non-last Jade resolved an output'
+        print('D2 PASS: shares/proofs/pubnonces added; no scripts or signatures')
+    else:
+        assert all(after['scripts']), 'D3 failed: last Jade did not resolve every output'
+        assert after['modifiable'] == 0, 'D3 failed: resolved PSBT remains modifiable'
+        print('D3 PASS: outputs resolved and fixed; still no signatures')
+
+
+def check_round2(before, after):
+    assert before['scripts'] == after['scripts'], 'D4 failed: output scripts changed in round 2'
+    for old, new in zip(before['inputs'], after['inputs']):
+        assert new['partials'] == old['partials'] + 1, \
+            f'input {new["index"]}: expected exactly one Jade partial signature'
+    print('D4 PASS: Jade verified the resolved outputs and added one partial signature per input')
+
+
+def musig_input(sp, setup):
+    value = sp.wally_sp_musig_input()
+    value.index = 0
+    pubkeys, _ = sp.make_cbuffer(setup['participants'].hex())
+    value.pub_keys = sp.cast(pubkeys, sp.c_void_p)
+    value.pub_keys_len = len(setup['participants'])
+    path = (sp.c_uint32 * 2)(MUSIG_BRANCH, MUSIG_INDEX)
+    value.path = sp.cast(path, sp.c_void_p)
+    value.path_len = 2
+    value._buffers = (pubkeys, path)  # keep the ctypes buffers alive
+    return value
+
+
+def session_digest(sp, psbt):
+    result, _ = sp.make_cbuffer('00' * SHA256_LEN)
+    assert sp.wally_psbt_get_sp_musig_session_digest(psbt, result, SHA256_LEN) == sp.WALLY_OK
+    return bytes(result)
+
+
+def cosigner_round1(sp, setup, data, entropy=b'\x33' * 64):
+    """The other participant's round 1: its share, proof and pubnonce."""
+    psbt = parse_psbt(sp, data)
+    nonce_out = (sp.c_void_p * 1)()
+    digest_out, _ = sp.make_cbuffer('00' * SHA256_LEN)
+    seckey = setup['cosigner']['seckey']
+    ret, status = sp.wally_psbt_sp_musig_round1(
+        psbt, sp.byref(musig_input(sp, setup)), 1, seckey, len(seckey), entropy,
+        len(entropy), 0, nonce_out, digest_out, SHA256_LEN)
+    assert ret == sp.WALLY_OK, ret
+    return serialize_psbt(sp, psbt, free=True), nonce_out[0], status
+
+
+def cosigner_round2(sp, setup, data, secnonce, digest):
+    """The other participant's round 2: its partial signature."""
+    psbt = parse_psbt(sp, data)
+    seckey = setup['cosigner']['seckey']
+    nonce = (sp.c_void_p * 1)(secnonce)
+    assert sp.wally_psbt_sp_musig_round2(psbt, sp.byref(musig_input(sp, setup)), 1,
+                                         seckey, len(seckey), nonce, digest,
+                                         len(digest), 0) == sp.WALLY_OK
+    return serialize_psbt(sp, psbt, free=True)
+
+
+
+def run_musig_roundtrip(jade, network='localtest', verbose=True):
+    """Jade signs a MuSig2 silent payment input across both rounds.
+
+    Jade goes first, so round 1 must add its share, proof and pubnonce without
+    resolving anything or signing. The cosigner then completes the coverage,
+    which resolves the outputs, and Jade signs in round 2.
+
+    Jade holds its secnonce in RAM between the rounds, so this has to run on a
+    single connection: reconnecting expires the session by design.
+    """
+    sp = load_wally()
+    assert sp, f'no libwally build found under {WALLY_DIR}'
+
+    def log(message):
+        if verbose:
+            print(message)
+
+    setup = musig_setup(jade, sp, network)
+    log(f'Descriptor: {setup["descriptor"]}')
+    recipient = get_recipient(jade, sp, network, 0, get_fingerprint(jade, sp, network))
+    psbt_bytes = build_musig_psbt(sp, setup, recipient['info'])
+
+    # Round 1: Jade is not the last signer, so it must not resolve or sign
+    before = snapshot(sp, psbt_bytes)
+    round1 = bytes(jade.sign_psbt(network, psbt_bytes))
+    check_round1(before, snapshot(sp, round1), 'incomplete')
+
+    psbt = parse_psbt(sp, round1)
+    digest = session_digest(sp, psbt)
+    sp.wally_psbt_free(psbt)
+
+    # The cosigner completes the coverage, which resolves every output
+    resolved, cosigner_nonce, status = cosigner_round1(sp, setup, round1)
+    assert status == WALLY_SP_COMPLETE, f'cosigner did not complete the shares: {status}'
+    psbt = parse_psbt(sp, resolved)
+    assert session_digest(sp, psbt) == digest, 'session digest moved across round 1'
+    assert psbt.contents.tx_modifiable_flags == 0, 'resolved psbt is still modifiable'
+    sp.wally_psbt_free(psbt)
+    log('Cosigner resolved the outputs; the session digest is unchanged')
+
+    # Round 2: Jade verifies the resolved outputs and adds one partial signature
+    before = snapshot(sp, resolved)
+    round2 = bytes(jade.sign_psbt(network, resolved))
+    check_round2(before, snapshot(sp, round2))
+
+    final = cosigner_round2(sp, setup, round2, cosigner_nonce, digest)
+    verify_musig_signature(sp, setup, final)
+    log('Jade and the cosigner produced a valid aggregate signature')
+
+    # The secnonce is spent, so the same round 2 must not be signable again.
+    # Signing twice under one nonce would leak the participant key.
+    log(f'Rejected: {assert_rejected(jade, network, resolved, MUSIG_EXPIRED_ERROR)}')
+    return setup, recipient
+
+
+def verify_musig_signature(sp, setup, data):
+    """Aggregate the partial signatures and check the input finalizes."""
+    psbt = parse_psbt(sp, data)
+    assert psbt.contents.inputs[0].musig2_partial_sigs.num_items == 2
+    path = (sp.c_uint32 * 2)(MUSIG_BRANCH, MUSIG_INDEX)
+    assert sp.wally_psbt_musig2_agg_then_derive_finalize_input(
+        psbt, 0, setup['aggregate'], len(setup['aggregate']), path, 2, 0) == sp.WALLY_OK
+    ret, length = sp.wally_psbt_get_input_taproot_signature_len(psbt, 0)
+    assert ret == sp.WALLY_OK and length, 'no aggregate signature produced'
+    sp.wally_psbt_free(psbt)
+
+
+def run_musig_negative_cases(jade, sp, setup, recipient, network='localtest', log=print):
+    """What a MuSig2 signing session must refuse between the two rounds.
+
+    Neither case reaches the signing step, so neither spends the secnonce that
+    its own round 1 stored.
+    """
+    # A psbt that is not the one round 1 committed to. The session is found by
+    # input and aggregate key, so Jade gets as far as comparing the digests.
+    round1 = bytes(jade.sign_psbt(network, build_musig_psbt(sp, setup, recipient['info'])))
+    resolved, _, status = cosigner_round1(sp, setup, round1)
+    assert status == WALLY_SP_COMPLETE
+    mutated = mutate_output_amount(sp, resolved)
+    log(f'Rejected: {assert_rejected(jade, network, mutated, MUSIG_CHANGED_ERROR)}')
+
+    # Jade's own round 1 handed straight back: its nonce is there, so this is
+    # round 2, but nobody has covered the other input's share
+    log(f'Rejected: {assert_rejected(jade, network, round1, MUSIG_UNRESOLVED_ERROR)}')
+
+
+def mutate_output_amount(sp, data, delta=1):
+    """Change what the psbt pays, leaving everything else in place."""
+    psbt = parse_psbt(sp, data)
+    amount = psbt.contents.outputs[0].amount
+    assert sp.wally_psbt_set_output_amount(psbt, 0, amount - delta) == sp.WALLY_OK
+    return serialize_psbt(sp, psbt, free=True)
+
+
+def run_musig_flow(jade, network='localtest', verbose=True):
+    """The whole MuSig2 silent payment story: both rounds, then the refusals."""
+    sp = load_wally()
+    assert sp, f'no libwally build found under {WALLY_DIR}'
+
+    def log(message):
+        if verbose:
+            print(message)
+
+    setup, recipient = run_musig_roundtrip(jade, network, verbose)
+    run_musig_negative_cases(jade, sp, setup, recipient, network, log)
+
+
 def main():
     parser = argparse.ArgumentParser(description='Silent payment round trip against a Jade')
     parser.add_argument('--serialport', default='tcp:127.0.0.1:30121',
@@ -555,6 +957,9 @@ def main():
     parser.add_argument('--collaborative', action='store_true',
                         help='Run the two signer round trip instead; needs '
                              'Settings > Wallet > Silent Payments > Collaborative On')
+    parser.add_argument('--musig', action='store_true',
+                        help='Run the MuSig2 two round flow instead; needs '
+                             'Settings > Wallet > Silent Payments > Collaborative On')
     args = parser.parse_args()
 
     if not load_wally():
@@ -563,7 +968,9 @@ def main():
     from jadepy.jade import JadeAPI
     with JadeAPI.create_serial(device=args.serialport, timeout=args.timeout) as jade:
         jade.set_mnemonic(args.mnemonic, temporary_wallet=True)
-        if args.collaborative:
+        if args.musig:
+            run_musig_flow(jade, args.network)
+        elif args.collaborative:
             run_collaborative_roundtrip(jade, args.network, args.account)
         else:
             run_roundtrip(jade, args.network, args.account)

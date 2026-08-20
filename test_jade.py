@@ -2773,6 +2773,27 @@ def test_silent_payment_collaborative_roundtrip(jadeapi, network='localtest'):
                        ' - Collaborative is Off in Settings')
 
 
+def test_silent_payment_musig_roundtrip(jadeapi, network='localtest'):
+    """Sign a MuSig2 silent payment input across both rounds, then the refusals.
+
+    The other participant is played by the test, so no second device is needed.
+    Jade keeps its secnonce in RAM between the rounds, so this must not
+    reconnect part way through.
+
+    Skipped unless the vendored libwally has been built for the host.
+    """
+    if not test_sp_roundtrip.load_wally():
+        logger.warning('Skipping MuSig2 silent payment flow - no libwally host build')
+        return
+    try:
+        test_sp_roundtrip.run_musig_flow(jadeapi, network, verbose=False)
+    except JadeError as err:
+        if not err.message.startswith('Collaborative silent payments are disabled'):
+            raise
+        logger.warning('Skipping MuSig2 silent payment flow'
+                       ' - Collaborative is Off in Settings')
+
+
 def test_silent_payment_sign_psbt(jadeapi):
     testcase = next(_get_test_cases('psbt_sp_v0.json'), None)
     if testcase is None:
@@ -3452,6 +3473,7 @@ def run_api_tests(jadeapi, isble, qemu, authuser=False):
     if not args.json_filter:
         test_silent_payment_roundtrip(jadeapi)
         test_silent_payment_collaborative_roundtrip(jadeapi)
+        test_silent_payment_musig_roundtrip(jadeapi)
     # Singlesig Liquid (PSET) tests
     test_sign_psbt(jadeapi, SIGN_PSET_SS_TESTS, has_psram)
 
