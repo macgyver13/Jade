@@ -39,6 +39,18 @@ typedef struct {
     uint8_t participant[EC_PUBLIC_KEY_LEN];
 } sp_musig_input_t;
 
+// Collaborative sending needs both signers, so unattended CI builds enable it
+// rather than leaving every collaborative test skipped on a setting no rpc
+// reaches. Production builds require the user to turn it on in Settings.
+static bool sp_collaborative_enabled(void)
+{
+#ifdef CONFIG_DEBUG_UNATTENDED_CI
+    return true;
+#else
+    return storage_get_sp_flags() & SP_COLLABORATIVE;
+#endif
+}
+
 static bool sp_musig_descriptor_matches(const network_t network_id, const uint32_t branch, const uint32_t index,
     const uint8_t* script, const size_t script_len)
 {
@@ -649,7 +661,7 @@ static bool sp_process_musig_psbt(const network_t network_id, const struct wally
     size_t num_inputs = 0;
     bool success = false;
 
-    if (!(storage_get_qr_flags() & SP_COLLABORATIVE)) {
+    if (!sp_collaborative_enabled()) {
         *errmsg = "Collaborative silent payments are disabled - enable in Settings";
         goto cleanup;
     }
@@ -817,7 +829,7 @@ bool sp_process_psbt(const network_t network_id, struct wally_psbt* psbt, sp_sum
             // We own only some of the eligible inputs, so we cannot derive the
             // outputs alone. Report what we would contribute and leave the psbt
             // untouched: the user confirms before anything is written.
-            if (!(storage_get_sp_flags() & SP_COLLABORATIVE)) {
+            if (!sp_collaborative_enabled()) {
                 *errmsg = "Collaborative silent payments are disabled - enable in Settings";
                 goto cleanup;
             }
