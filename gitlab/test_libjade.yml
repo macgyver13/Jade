@@ -7,6 +7,15 @@
     - pip install -r pinserver/requirements.txt
     - pip install .
     - pip install pytest
+    # test_sp_roundtrip.py loads the vendored libwally through ctypes, which needs
+    # the autotools build - the libjade cmake build does not produce src/.libs.
+    # --enable-export-all is required: contrib/sp_psbt_roundtrip.py calls the
+    # secp256k1 silentpayments scanning symbols that libwally does not wrap.
+    - pushd components/libwally-core/upstream
+    - ./tools/autogen.sh
+    - ./configure --enable-debug --enable-export-all --disable-swig-java --disable-swig-python
+    - make -j4
+    - popd
 
 test_libjade:
   extends: .libjade_test_template
