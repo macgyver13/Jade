@@ -21,7 +21,9 @@ disconnect or exit between rounds: that deliberately expires the secnonce.
 import argparse
 import base64
 
-from test_sp_roundtrip import HARDENED, TEST_MNEMONIC, load_wally
+from test_sp_roundtrip import (HARDENED, TEST_MNEMONIC, check_round1, check_round2,
+                              load_wally, parse_psbt, serialize_psbt, snapshot,
+                              sp_output_scripts)
 
 
 DEFAULT_DEVICE = 'tcp:127.0.0.1:30121'
@@ -106,86 +108,6 @@ def setup(args, jade, wally):
     print(f'\nRegistered as {args.name!r}')
     print(f'Address /{args.branch}/{args.index}: {address}')
     print('Compare this address with Coldcard before funding the signet wallet.')
-
-
-def parse_psbt(wally, data):
-    psbt = wally.POINTER(wally.wally_psbt)()
-    assert wally.wally_psbt_from_bytes(data, len(data), 0, wally.byref(psbt)) == wally.WALLY_OK
-    return psbt
-
-
-def sp_output_scripts(wally, psbt):
-    scripts = []
-    for index in range(psbt.contents.num_outputs):
-        ret, info_len = wally.wally_psbt_get_output_sp_v0_info_len(psbt, index)
-        if ret == wally.WALLY_OK and info_len:
-            ret, script_len = wally.wally_psbt_get_output_script_len(psbt, index)
-            assert ret == wally.WALLY_OK
-            scripts.append(script_len)
-    assert scripts, 'PSBT has no silent-payment outputs'
-    return scripts
-
-
-def snapshot(wally, data):
-    psbt = parse_psbt(wally, data)
-    inputs = []
-    for index in range(psbt.contents.num_inputs):
-        item = psbt.contents.inputs[index]
-        if item.musig2_pubkeys.num_items:
-            ret, tap_sig_len = wally.wally_psbt_get_input_taproot_signature_len(psbt, index)
-            assert ret == wally.WALLY_OK
-            inputs.append({
-                'index': index,
-                'shares': item.sp_partial_ecdh_shares.num_items,
-                'proofs': item.sp_partial_dleq_proofs.num_items,
-                'pubnonces': item.musig2_pubnonces.num_items,
-                'partials': item.musig2_partial_sigs.num_items,
-                'tap_sig_len': tap_sig_len,
-            })
-    result = {
-        'inputs': inputs,
-        'scripts': sp_output_scripts(wally, psbt),
-        'modifiable': psbt.contents.tx_modifiable_flags,
-    }
-    wally.wally_psbt_free(psbt)
-    assert inputs, 'PSBT has no MuSig2 inputs'
-    return result
-
-
-def check_round1(before, after, expected):
-    assert len(after['inputs']) == len(before['inputs'])
-    for old, new in zip(before['inputs'], after['inputs']):
-        assert new['index'] == old['index']
-        assert new['shares'] > old['shares'], f'input {new["index"]}: no ECDH share added'
-        assert new['proofs'] > old['proofs'], f'input {new["index"]}: no DLEQ proof added'
-        assert new['pubnonces'] == old['pubnonces'] + 1, \
-            f'input {new["index"]}: expected exactly one Jade pubnonce'
-        assert new['partials'] == old['partials'], f'input {new["index"]}: signed during round 1'
-        assert new['tap_sig_len'] == 0, f'input {new["index"]}: taproot signature present in round 1'
-    if expected == 'incomplete':
-        assert not any(after['scripts']), 'D2 failed: non-last Jade resolved an output'
-        print('D2 PASS: shares/proofs/pubnonces added; no scripts or signatures')
-    else:
-        assert all(after['scripts']), 'D3 failed: last Jade did not resolve every output'
-        assert after['modifiable'] == 0, 'D3 failed: resolved PSBT remains modifiable'
-        print('D3 PASS: outputs resolved and fixed; still no signatures')
-
-
-def check_round2(before, after):
-    assert before['scripts'] == after['scripts'], 'D4 failed: output scripts changed in round 2'
-    for old, new in zip(before['inputs'], after['inputs']):
-        assert new['partials'] == old['partials'] + 1, \
-            f'input {new["index"]}: expected exactly one Jade partial signature'
-    print('D4 PASS: Jade verified the resolved outputs and added one partial signature per input')
-
-
-def serialize_psbt(wally, psbt):
-    ret, length = wally.wally_psbt_get_length(psbt, 0)
-    assert ret == wally.WALLY_OK
-    output = (wally.c_ubyte * length)()
-    ret, written = wally.wally_psbt_to_bytes(psbt, 0, output, length)
-    assert ret == wally.WALLY_OK and written == length
-    return bytes(output)
 
 
 def synthetic_path(wally, psbt_input, aggregate):
