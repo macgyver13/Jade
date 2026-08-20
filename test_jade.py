@@ -2752,6 +2752,27 @@ def test_silent_payment_roundtrip(jadeapi, network='localtest'):
     test_sp_roundtrip.run_roundtrip(jadeapi, network, verbose=False)
 
 
+def test_silent_payment_collaborative_roundtrip(jadeapi, network='localtest'):
+    """Contribute a share for one input of two, then sign once the other signer's
+    share has resolved the outputs.
+
+    Skipped unless the vendored libwally has been built for the host, and unless
+    Settings > Wallet > Silent Payments > Collaborative is On - the setting is
+    held in nvs and there is no rpc to switch it on from here.
+    """
+    if not test_sp_roundtrip.load_wally():
+        logger.warning('Skipping collaborative silent payment round trip'
+                       ' - no libwally host build')
+        return
+    try:
+        test_sp_roundtrip.run_collaborative_roundtrip(jadeapi, network, verbose=False)
+    except JadeError as err:
+        if not err.message.startswith('Collaborative silent payments are disabled'):
+            raise
+        logger.warning('Skipping collaborative silent payment round trip'
+                       ' - Collaborative is Off in Settings')
+
+
 def test_silent_payment_sign_psbt(jadeapi):
     testcase = next(_get_test_cases('psbt_sp_v0.json'), None)
     if testcase is None:
@@ -2809,7 +2830,8 @@ def test_silent_payment_sign_psbt(jadeapi):
     globals_, inputs, outputs = _duplicate_sp_output(psbt)
     globals_ = [(key, b'\x00' if key == b'\x06' else value) for key, value in globals_]
     outputs[0].append((b'\x04', derived[0]))
-    signed = _parse_psbt_maps(jadeapi.sign_psbt(network, _serialize_psbt_maps(globals_, inputs, outputs)))[2]
+    signed = jadeapi.sign_psbt(network, _serialize_psbt_maps(globals_, inputs, outputs))
+    signed = _parse_psbt_maps(signed)[2]
     assert [dict(output)[b'\x04'] for output in signed[:2]] == derived
 
     globals_, inputs, outputs = _duplicate_sp_output(psbt)
@@ -3429,6 +3451,7 @@ def run_api_tests(jadeapi, isble, qemu, authuser=False):
     test_silent_payment_sign_psbt(jadeapi)
     if not args.json_filter:
         test_silent_payment_roundtrip(jadeapi)
+        test_silent_payment_collaborative_roundtrip(jadeapi)
     # Singlesig Liquid (PSET) tests
     test_sign_psbt(jadeapi, SIGN_PSET_SS_TESTS, has_psram)
 

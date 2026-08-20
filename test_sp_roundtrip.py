@@ -469,8 +469,9 @@ def run_collaborative_roundtrip(jade, network='localtest', account=0, verbose=Tr
         if verbose:
             print(message)
 
-    recipient = get_recipient(jade, sp, network, account)
-    ours, change = get_wallet_keys(jade, sp, network, 1)
+    fingerprint = get_fingerprint(jade, sp, network)
+    recipient = get_recipient(jade, sp, network, account, fingerprint)
+    ours, change = get_wallet_keys(jade, sp, network, 1, fingerprint)
     foreign = get_foreign_key(sp)
     log(f'Pay to: {recipient["address"]}')
 
