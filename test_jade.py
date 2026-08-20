@@ -2702,6 +2702,28 @@ def _serialize_psbt_maps(globals_, inputs, outputs):
     return b'psbt\xff' + b''.join(_write_psbt_map(fields) for fields in maps)
 
 
+def _duplicate_sp_output(psbt):
+    """Add a second silent payment output paying the same address as the first.
+
+    The copy is placed alongside the original so the silent payment outputs are
+    outputs 0 and 1. Both share a scan and spend key, which BIP375 orders by
+    output index. The copy is paid for out of the change, so the fee is unchanged.
+    """
+    globals_, inputs, outputs = _parse_psbt_maps(psbt)
+    duplicate = list(outputs[0])
+    amount = int.from_bytes(dict(duplicate)[b'\x03'], 'little')
+    assert dict(outputs[1]).get(b'\x09') is None, 'Second output is not the change'
+
+    change = int.from_bytes(dict(outputs[1])[b'\x03'], 'little') - amount
+    outputs[1] = [(key, change.to_bytes(8, 'little') if key == b'\x03' else value)
+                  for key, value in outputs[1]]
+    outputs.insert(1, duplicate)
+
+    count = _write_compact_size(len(outputs))
+    globals_ = [(key, count if key == b'\x05' else value) for key, value in globals_]
+    return globals_, inputs, outputs
+
+
 def _check_silent_payment_psbt(psbt, silent_payment_info):
     globals_, inputs, outputs = _parse_psbt_maps(psbt)
     globals_by_key = dict(globals_)
