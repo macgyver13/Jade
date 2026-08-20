@@ -2862,7 +2862,8 @@ def test_silent_payment_sign_psbt(jadeapi):
         jadeapi.sign_psbt(network, _serialize_psbt_maps(globals_, inputs, outputs))
         assert False, 'Silent payment psbt with a mismatching proposed script accepted'
     except JadeError as err:
-        assert err.message == 'Failed to derive silent payment outputs', err.message
+        expected = 'Failed to derive silent payment outputs, or a proposed script did not match'
+        assert err.message == expected, err.message
 
     # An output script on every silent payment output makes the psbt claim to
     # be resolved, which BIP375 requires ECDH shares to accompany. It has none.
