@@ -1,0 +1,9 @@
+{
+  "id": "segwit_v2_input",
+  "description": "Segwit v2 input is rejected for silent payments",
+  "input": {
+    "network": "localtest",
+    "psbt": "cHNidP8BAgQCAAAAAQQBAQEFAQEBBgEAAfsEAgAAAAABAR+ghgEAAAAAABZSFDSWLUEqVomqEjNymRZhyDeKUy1hIgIC6nmVbWoYQJHE2uF3iwzr8o+suHwRi35Wyy/ZT8RCwUBIMEUCIQCE+yIkKP7L4nct9r3hyUth739j49YWPnYFfofmWTPwNQIgcCHc4S+TJtoCEu1HuUeDJu0Ahi62ZJYtv8/GFgBftrIBAQMEAQAAACIGAup5lW1qGECRxNrhd4sM6/KPrLh8EYt+Vssv2U/EQsFAGFnR87BUAACAAQAAgAAAAIAAAAAAAAAAAAEOIGcxpCBxn4J0WZD3h0MmTpmMH+z+Gt9ndSJmpfmPx/GWAQ8EAAAAAAEQBP7///8iHQJ6SH/Bn7dph3uHQtbqGBGPPE5yseqMbeYCp61KQdvgaCECzTL/c0k6QqiItcKuZVjMYqgMhTfk/QnhwhoGnQawRDEiHgJ6SH/Bn7dph3uHQtbqGBGPPE5yseqMbeYCp61KQdvgaEAdDC+Yna/Uydp6aV6cGqVKA8ucBXsuTjoakDUKk85PIiU1BMwVf5lnFIwZ1UANeE6mZ1ETaAjuos+G/L32MeEFAAEDCBhzAQAAAAAAAQQiUSDgj4sNQB5FyNuAObuaXQ9YRv1NG1gUWIgFgqhtqQugewEJQgJ6SH/Bn7dph3uHQtbqGBGPPE5yseqMbeYCp61KQdvgaANh4bHp3l5CyyAH98pUueDVftE5OPrVbT8Z5XUTqPzgOQA="
+  },
+  "validation_result": "invalid"
+}

@@ -1,0 +1,9 @@
+{
+  "id": "ineligible_p2sh",
+  "description": "P2SH-only input is not silent-payment eligible",
+  "input": {
+    "network": "localtest",
+    "psbt": "cHNidP8BAgQCAAAAAQQBAQEFAQEBBgEAAfsEAgAAAAABAFMCAAAAAXyoMfPUiQn+aMsOqqoR+Hc97n6McwhTN1kOJLsGOQ20AAAAAAD/////AaCGAQAAAAAAF6kU2OZohxTu7Qqi7dSJqhyjwXFwHk2HAAAAACICAnpHklPQCiBaEKlDjzcgGbnzZOCoNoAL+Dnb0o585rlVSDBFAiEAhhj2zjmDg57p8XJorDiWxQM8JaqG8ZRKmiDI/E2yjRECIGL+ClmWrYkJKUa7DCzYfa9/lNBc7g2mRcsuMHDNM77HASICAr5Ar99ismPLfe4rmF0cOP5BsZlNKwUHU0PRcsIY6rHERzBEAiAigmXJMNcU/xgJ3IA18tjP8jCDq/2codoK6Ou+cNKBAgIgddPQi2NIMtmvNVqHvdwDjg3NdjvfOIGF16cBLwEA3T8BAQRHUiECvkCv32KyY8t97iuYXRw4/kGxmU0rBQdTQ9FywhjqscQhAnpHklPQCiBaEKlDjzcgGbnzZOCoNoAL+Dnb0o585rlVUq4BDiDNOBpFUI/j2cq2O34PcEoPVp2/1VqYEC2eozruYht19AEPBAAAAAABEAT+////AAEDCBhzAQAAAAAAAQlCAnpIf8Gft2mHe4dC1uoYEY88TnKx6oxt5gKnrUpB2+BoA2HhseneXkLLIAf3ylS54NV+0Tk4+tVtPxnldROo/OA5AA=="
+  },
+  "validation_result": "invalid"
+}
