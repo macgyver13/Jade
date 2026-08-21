@@ -1,0 +1,47 @@
+{
+  "id": "foreign_inputs_only",
+  "description": "Only foreign eligible inputs are not owned by Jade",
+  "input": {
+    "network": "localtest",
+    "psbt": "cHNidP8BAgQCAAAAAQQBAQEFAQEBBgEAAfsEAgAAAAABAR+ghgEAAAAAABYAFAwVpKPpgQSvv3f9e5JWFk1B08/kIgYDeWLUWzjovPgvqO+oQyoB8gyaU+JMfT8R3xl8uOcJJtoY3q2+71QAAIABAACAAAAAgAAAAAAAAAAAAQ4gPQnNmu4RugALG9q0KVVGuHX60yHC/8fgQPkROpQ72MsBDwQAAAAAARAE/v///wABAwgYcwEAAAAAAAEJQgJ6SH/Bn7dph3uHQtbqGBGPPE5yseqMbeYCp61KQdvgaANh4bHp3l5CyyAH98pUueDVftE5OPrVbT8Z5XUTqPzgOQA="
+  },
+  "validation_result": "invalid",
+  "key_profile": "jade",
+  "supplementary": {
+    "hex": "70736274ff0102040200000001040101010501010106010001fb04020000000001011fa0860100000000001600140c15a4a3e98104afbf77fd7b9256164d41d3cfe42206037962d45b38e8bcf82fa8efa8432a01f20c9a53e24c7d3f11df197cb8e70926da18deadbeef5400008001000080000000800000000000000000010e203d09cd9aee11ba000b1bdab4295546b875fad321c2ffc7e040f9113a943bd8cb010f0400000000011004feffffff000103081873010000000000010942027a487fc19fb769877b8742d6ea18118f3c4e72b1ea8c6de602a7ad4a41dbe0680361e1b1e9de5e42cb2007f7ca54b9e0d57ed13938fad56d3f19e57513a8fce03900",
+    "inputs": [
+      {
+        "input_index": 0,
+        "private_key": "7777777777777777777777777777777777777777777777777777777777777777",
+        "public_key": "037962d45b38e8bcf82fa8efa8432a01f20c9a53e24c7d3f11df197cb8e70926da",
+        "prevout_txid": "cbd83b943a11f940e0c7ffc221d3fa75b8465529b4da1b0b00ba11ee9acd093d",
+        "prevout_index": 0,
+        "amount": 100000,
+        "non_witness_utxo": "020000000118a717663b0bab14b12a1a771323ff1e4079dd532e5dd13e28ea1081c700984a0000000000ffffffff01a0860100000000001600140c15a4a3e98104afbf77fd7b9256164d41d3cfe400000000",
+        "witness_utxo": "a0860100000000001600140c15a4a3e98104afbf77fd7b9256164d41d3cfe4",
+        "sequence": 4294967294,
+        "signed": false,
+        "owner": "foreign",
+        "master_fingerprint": "deadbeef",
+        "derivation_path": [
+          2147483732,
+          2147483649,
+          2147483648,
+          0,
+          0
+        ],
+        "derivation_private_key": "7777777777777777777777777777777777777777777777777777777777777777",
+        "derivation_public_key": "037962d45b38e8bcf82fa8efa8432a01f20c9a53e24c7d3f11df197cb8e70926da"
+      }
+    ],
+    "sp_proofs": [],
+    "outputs": [
+      {
+        "output_index": 0,
+        "amount": 95000,
+        "sp_v0_info": "027a487fc19fb769877b8742d6ea18118f3c4e72b1ea8c6de602a7ad4a41dbe0680361e1b1e9de5e42cb2007f7ca54b9e0d57ed13938fad56d3f19e57513a8fce039"
+      }
+    ],
+    "task": "fail_sign"
+  }
+}

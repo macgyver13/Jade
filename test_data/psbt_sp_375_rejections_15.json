@@ -1,0 +1,61 @@
+{
+  "id": "wrong_k_assignment",
+  "description": "Same-scan-key output with wrong k is rejected",
+  "input": {
+    "network": "localtest",
+    "psbt": "cHNidP8BAgQCAAAAAQQBAQEFAQIBBgEAAfsEAgAAAAABAR9ADQMAAAAAABYAFDSWLUEqVomqEjNymRZhyDeKUy1hIgIC6nmVbWoYQJHE2uF3iwzr8o+suHwRi35Wyy/ZT8RCwUBIMEUCIQChrHq5za5F/KFryBBY8bhidRe18RIzmbFnT+HrOOgX9wIgSwpknw9nbsHWZjixEInlDYkkOpWQ+MqbWEtBMBJBmPYBAQMEAQAAACIGAup5lW1qGECRxNrhd4sM6/KPrLh8EYt+Vssv2U/EQsFAGFnR87BUAACAAQAAgAAAAIAAAAAAAAAAAAEOIHuL3Tna4mhj9a40FTprd7G+FMYA6OxEasWlztfV/2NZAQ8EAAAAAAEQBP7///8iHQJ6SH/Bn7dph3uHQtbqGBGPPE5yseqMbeYCp61KQdvgaCECzTL/c0k6QqiItcKuZVjMYqgMhTfk/QnhwhoGnQawRDEiHgJ6SH/Bn7dph3uHQtbqGBGPPE5yseqMbeYCp61KQdvgaEAdDC+Yna/Uydp6aV6cGqVKA8ucBXsuTjoakDUKk85PIiU1BMwVf5lnFIwZ1UANeE6mZ1ETaAjuos+G/L32MeEFAAEDCJBfAQAAAAAAAQQiUSCNQKZQYu/mY75TjqyfCm6g+QN06G562hC1Wm/VdiIQvwEJQgJ6SH/Bn7dph3uHQtbqGBGPPE5yseqMbeYCp61KQdvgaAJA3FkMpUri5nSkwt96iTDQde2b4sRMKYMr3WSp1gKPzwABAwiQXwEAAAAAAAEEIlEgGSV9wdFxThe6X+5SILE3GlWcy7vZGtaILfgGqnNgjL4BCUICekh/wZ+3aYd7h0LW6hgRjzxOcrHqjG3mAqetSkHb4GgCMocN7UQnZGZktjAW3Pee5WKp+GyMzHa+rIscX3p1hRoA"
+  },
+  "validation_result": "invalid",
+  "key_profile": "jade",
+  "supplementary": {
+    "hex": "70736274ff0102040200000001040101010501020106010001fb04020000000001011f400d03000000000016001434962d412a5689aa123372991661c8378a532d61220202ea79956d6a184091c4dae1778b0cebf28facb87c118b7e56cb2fd94fc442c140483045022100a1ac7ab9cdae45fca16bc81058f1b8627517b5f1123399b1674fe1eb38e817f702204b0a649f0f676ec1d66638b11089e50d89243a9590f8ca9b584b4130124198f60101030401000000220602ea79956d6a184091c4dae1778b0cebf28facb87c118b7e56cb2fd94fc442c1401859d1f3b05400008001000080000000800000000000000000010e207b8bdd39dae26863f5ae34153a6b77b1be14c600e8ec446ac5a5ced7d5ff6359010f0400000000011004feffffff221d027a487fc19fb769877b8742d6ea18118f3c4e72b1ea8c6de602a7ad4a41dbe0682102cd32ff73493a42a888b5c2ae6558cc62a80c8537e4fd09e1c21a069d06b04431221e027a487fc19fb769877b8742d6ea18118f3c4e72b1ea8c6de602a7ad4a41dbe068401d0c2f989dafd4c9da7a695e9c1aa54a03cb9c057b2e4e3a1a90350a93ce4f22253504cc157f9967148c19d5400d784ea66751136808eea2cf86fcbdf631e10500010308905f01000000000001042251208d40a65062efe663be538eac9f0a6ea0f90374e86e7ada10b55a6fd5762210bf010942027a487fc19fb769877b8742d6ea18118f3c4e72b1ea8c6de602a7ad4a41dbe0680240dc590ca54ae2e674a4c2df7a8930d075ed9be2c44c29832bdd64a9d6028fcf00010308905f010000000000010422512019257dc1d1714e17ba5fee5220b1371a559ccbbbd91ad6882df806aa73608cbe010942027a487fc19fb769877b8742d6ea18118f3c4e72b1ea8c6de602a7ad4a41dbe0680232870ded4427646664b63016dcf79ee562a9f86c8ccc76beac8b1c5f7a75851a00",
+    "inputs": [
+      {
+        "input_index": 0,
+        "private_key": "e94ff4cf5cc77b8601e908fe37475e7f4662a43d2c9cc994ee539ad5f71239a4",
+        "public_key": "02ea79956d6a184091c4dae1778b0cebf28facb87c118b7e56cb2fd94fc442c140",
+        "prevout_txid": "5963ffd5d7cea5c56a44ece800c614beb1776b3a1534aef56368e2da39dd8b7b",
+        "prevout_index": 0,
+        "amount": 200000,
+        "non_witness_utxo": "020000000118a717663b0bab14b12a1a771323ff1e4079dd532e5dd13e28ea1081c700984a0000000000ffffffff01400d03000000000016001434962d412a5689aa123372991661c8378a532d6100000000",
+        "witness_utxo": "400d03000000000016001434962d412a5689aa123372991661c8378a532d61",
+        "sequence": 4294967294,
+        "signed": true,
+        "owner": "wallet",
+        "master_fingerprint": "59d1f3b0",
+        "derivation_path": [
+          2147483732,
+          2147483649,
+          2147483648,
+          0,
+          0
+        ],
+        "derivation_private_key": "e94ff4cf5cc77b8601e908fe37475e7f4662a43d2c9cc994ee539ad5f71239a4",
+        "derivation_public_key": "02ea79956d6a184091c4dae1778b0cebf28facb87c118b7e56cb2fd94fc442c140"
+      }
+    ],
+    "sp_proofs": [
+      {
+        "scan_key": "027a487fc19fb769877b8742d6ea18118f3c4e72b1ea8c6de602a7ad4a41dbe068",
+        "ecdh_share": "02cd32ff73493a42a888b5c2ae6558cc62a80c8537e4fd09e1c21a069d06b04431",
+        "dleq_proof": "1d0c2f989dafd4c9da7a695e9c1aa54a03cb9c057b2e4e3a1a90350a93ce4f22253504cc157f9967148c19d5400d784ea66751136808eea2cf86fcbdf631e105",
+        "input_index": 0
+      }
+    ],
+    "outputs": [
+      {
+        "output_index": 0,
+        "amount": 90000,
+        "sp_v0_info": "027a487fc19fb769877b8742d6ea18118f3c4e72b1ea8c6de602a7ad4a41dbe0680240dc590ca54ae2e674a4c2df7a8930d075ed9be2c44c29832bdd64a9d6028fcf",
+        "script": "51208d40a65062efe663be538eac9f0a6ea0f90374e86e7ada10b55a6fd5762210bf"
+      },
+      {
+        "output_index": 1,
+        "amount": 90000,
+        "sp_v0_info": "027a487fc19fb769877b8742d6ea18118f3c4e72b1ea8c6de602a7ad4a41dbe0680232870ded4427646664b63016dcf79ee562a9f86c8ccc76beac8b1c5f7a75851a",
+        "script": "512019257dc1d1714e17ba5fee5220b1371a559ccbbbd91ad6882df806aa73608cbe"
+      }
+    ],
+    "task": "fail_sign"
+  }
+}

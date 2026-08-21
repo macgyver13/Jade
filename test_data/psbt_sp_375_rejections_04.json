@@ -1,0 +1,55 @@
+{
+  "id": "segwit_v2_input",
+  "description": "Segwit v2 input is rejected for silent payments",
+  "input": {
+    "network": "localtest",
+    "psbt": "cHNidP8BAgQCAAAAAQQBAQEFAQEBBgEAAfsEAgAAAAABAR+ghgEAAAAAABZSFDSWLUEqVomqEjNymRZhyDeKUy1hIgIC6nmVbWoYQJHE2uF3iwzr8o+suHwRi35Wyy/ZT8RCwUBIMEUCIQCE+yIkKP7L4nct9r3hyUth739j49YWPnYFfofmWTPwNQIgcCHc4S+TJtoCEu1HuUeDJu0Ahi62ZJYtv8/GFgBftrIBAQMEAQAAACIGAup5lW1qGECRxNrhd4sM6/KPrLh8EYt+Vssv2U/EQsFAGFnR87BUAACAAQAAgAAAAIAAAAAAAAAAAAEOIGcxpCBxn4J0WZD3h0MmTpmMH+z+Gt9ndSJmpfmPx/GWAQ8EAAAAAAEQBP7///8iHQJ6SH/Bn7dph3uHQtbqGBGPPE5yseqMbeYCp61KQdvgaCECzTL/c0k6QqiItcKuZVjMYqgMhTfk/QnhwhoGnQawRDEiHgJ6SH/Bn7dph3uHQtbqGBGPPE5yseqMbeYCp61KQdvgaEAdDC+Yna/Uydp6aV6cGqVKA8ucBXsuTjoakDUKk85PIiU1BMwVf5lnFIwZ1UANeE6mZ1ETaAjuos+G/L32MeEFAAEDCBhzAQAAAAAAAQQiUSDgj4sNQB5FyNuAObuaXQ9YRv1NG1gUWIgFgqhtqQugewEJQgJ6SH/Bn7dph3uHQtbqGBGPPE5yseqMbeYCp61KQdvgaANh4bHp3l5CyyAH98pUueDVftE5OPrVbT8Z5XUTqPzgOQA="
+  },
+  "validation_result": "invalid",
+  "key_profile": "jade",
+  "supplementary": {
+    "hex": "70736274ff0102040200000001040101010501010106010001fb04020000000001011fa08601000000000016521434962d412a5689aa123372991661c8378a532d61220202ea79956d6a184091c4dae1778b0cebf28facb87c118b7e56cb2fd94fc442c14048304502210084fb222428fecbe2772df6bde1c94b61ef7f63e3d6163e76057e87e65933f03502207021dce12f9326da0212ed47b9478326ed00862eb664962dbfcfc616005fb6b20101030401000000220602ea79956d6a184091c4dae1778b0cebf28facb87c118b7e56cb2fd94fc442c1401859d1f3b05400008001000080000000800000000000000000010e206731a420719f82745990f78743264e998c1fecfe1adf67752266a5f98fc7f196010f0400000000011004feffffff221d027a487fc19fb769877b8742d6ea18118f3c4e72b1ea8c6de602a7ad4a41dbe0682102cd32ff73493a42a888b5c2ae6558cc62a80c8537e4fd09e1c21a069d06b04431221e027a487fc19fb769877b8742d6ea18118f3c4e72b1ea8c6de602a7ad4a41dbe068401d0c2f989dafd4c9da7a695e9c1aa54a03cb9c057b2e4e3a1a90350a93ce4f22253504cc157f9967148c19d5400d784ea66751136808eea2cf86fcbdf631e1050001030818730100000000000104225120e08f8b0d401e45c8db8039bb9a5d0f5846fd4d1b581458880582a86da90ba07b010942027a487fc19fb769877b8742d6ea18118f3c4e72b1ea8c6de602a7ad4a41dbe0680361e1b1e9de5e42cb2007f7ca54b9e0d57ed13938fad56d3f19e57513a8fce03900",
+    "inputs": [
+      {
+        "input_index": 0,
+        "private_key": "e94ff4cf5cc77b8601e908fe37475e7f4662a43d2c9cc994ee539ad5f71239a4",
+        "public_key": "02ea79956d6a184091c4dae1778b0cebf28facb87c118b7e56cb2fd94fc442c140",
+        "prevout_txid": "96f1c78ff9a566227567df1afeec1f8c994e264387f7905974829f7120a43167",
+        "prevout_index": 0,
+        "amount": 100000,
+        "non_witness_utxo": "020000000118a717663b0bab14b12a1a771323ff1e4079dd532e5dd13e28ea1081c700984a0000000000ffffffff01a08601000000000016521434962d412a5689aa123372991661c8378a532d6100000000",
+        "witness_utxo": "a08601000000000016521434962d412a5689aa123372991661c8378a532d61",
+        "sequence": 4294967294,
+        "signed": true,
+        "owner": "wallet",
+        "master_fingerprint": "59d1f3b0",
+        "derivation_path": [
+          2147483732,
+          2147483649,
+          2147483648,
+          0,
+          0
+        ],
+        "derivation_private_key": "e94ff4cf5cc77b8601e908fe37475e7f4662a43d2c9cc994ee539ad5f71239a4",
+        "derivation_public_key": "02ea79956d6a184091c4dae1778b0cebf28facb87c118b7e56cb2fd94fc442c140"
+      }
+    ],
+    "sp_proofs": [
+      {
+        "scan_key": "027a487fc19fb769877b8742d6ea18118f3c4e72b1ea8c6de602a7ad4a41dbe068",
+        "ecdh_share": "02cd32ff73493a42a888b5c2ae6558cc62a80c8537e4fd09e1c21a069d06b04431",
+        "dleq_proof": "1d0c2f989dafd4c9da7a695e9c1aa54a03cb9c057b2e4e3a1a90350a93ce4f22253504cc157f9967148c19d5400d784ea66751136808eea2cf86fcbdf631e105",
+        "input_index": 0
+      }
+    ],
+    "outputs": [
+      {
+        "output_index": 0,
+        "amount": 95000,
+        "sp_v0_info": "027a487fc19fb769877b8742d6ea18118f3c4e72b1ea8c6de602a7ad4a41dbe0680361e1b1e9de5e42cb2007f7ca54b9e0d57ed13938fad56d3f19e57513a8fce039",
+        "script": "5120e08f8b0d401e45c8db8039bb9a5d0f5846fd4d1b581458880582a86da90ba07b"
+      }
+    ],
+    "task": "fail_sign"
+  }
+}

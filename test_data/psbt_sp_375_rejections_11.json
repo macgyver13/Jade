@@ -1,0 +1,47 @@
+{
+  "id": "origin_script_mismatch_p2sh_p2wpkh",
+  "description": "A Jade origin must match its P2SH-P2WPKH UTXO script",
+  "input": {
+    "network": "localtest",
+    "psbt": "cHNidP8BAgQCAAAAAQQBAQEFAQEBBgEAAfsEAgAAAAABAFMCAAAAAcm/BBHgTerRUAB8oAUIB0/QSGi4nXvtlDACIxd4fYJ7AAAAAAD/////AaCGAQAAAAAAF6kUtNVOY9GIOraAgL1DG0flu6SOw3OHAAAAAAEBIKCGAQAAAAAAF6kUtNVOY9GIOraAgL1DG0flu6SOw3OHAQQWABRh3TkaPHWmpBpIhggHiktIHzRK9CIGA63M0SbnmKX7seCMV8DCod0JBHkQZlcaUbGANwVtq5+QGFnR87AxAACAAQAAgAAAAIAAAAAAAAAAAAEOIPtQj6D70yYaS0tZfKxmwYkKiIAxZ/cF1mZmrln/vu/iAQ8EAAAAAAEQBP7///8AAQMIGHMBAAAAAAABCUICekh/wZ+3aYd7h0LW6hgRjzxOcrHqjG3mAqetSkHb4GgDYeGx6d5eQssgB/fKVLng1X7ROTj61W0/GeV1E6j84DkA"
+  },
+  "validation_result": "invalid",
+  "key_profile": "jade",
+  "supplementary": {
+    "hex": "70736274ff0102040200000001040101010501010106010001fb0402000000000100530200000001c9bf0411e04dead150007ca00508074fd04868b89d7bed9430022317787d827b0000000000ffffffff01a08601000000000017a914b4d54e63d1883ab68080bd431b47e5bba48ec3738700000000010120a08601000000000017a914b4d54e63d1883ab68080bd431b47e5bba48ec37387010416001461dd391a3c75a6a41a488608078a4b481f344af4220603adccd126e798a5fbb1e08c57c0c2a1dd0904791066571a51b18037056dab9f901859d1f3b03100008001000080000000800000000000000000010e20fb508fa0fbd3261a4b4b597cac66c1890a88803167f705d66666ae59ffbeefe2010f0400000000011004feffffff000103081873010000000000010942027a487fc19fb769877b8742d6ea18118f3c4e72b1ea8c6de602a7ad4a41dbe0680361e1b1e9de5e42cb2007f7ca54b9e0d57ed13938fad56d3f19e57513a8fce03900",
+    "inputs": [
+      {
+        "input_index": 0,
+        "private_key": "0ce5f07a2d97935e1032825a0cc60f6aae19469320e88d1f1506cc992182cc54",
+        "public_key": "03adccd126e798a5fbb1e08c57c0c2a1dd0904791066571a51b18037056dab9f90",
+        "prevout_txid": "e2efbeff59ae6666d605f7673180880a89c166ac7c594b4b1a26d3fba08f50fb",
+        "prevout_index": 0,
+        "amount": 100000,
+        "non_witness_utxo": "0200000001c9bf0411e04dead150007ca00508074fd04868b89d7bed9430022317787d827b0000000000ffffffff01a08601000000000017a914b4d54e63d1883ab68080bd431b47e5bba48ec3738700000000",
+        "witness_utxo": "a08601000000000017a914b4d54e63d1883ab68080bd431b47e5bba48ec37387",
+        "sequence": 4294967294,
+        "signed": false,
+        "owner": "wallet",
+        "master_fingerprint": "59d1f3b0",
+        "derivation_path": [
+          2147483697,
+          2147483649,
+          2147483648,
+          0,
+          0
+        ],
+        "derivation_private_key": "0ce5f07a2d97935e1032825a0cc60f6aae19469320e88d1f1506cc992182cc54",
+        "derivation_public_key": "03adccd126e798a5fbb1e08c57c0c2a1dd0904791066571a51b18037056dab9f90"
+      }
+    ],
+    "sp_proofs": [],
+    "outputs": [
+      {
+        "output_index": 0,
+        "amount": 95000,
+        "sp_v0_info": "027a487fc19fb769877b8742d6ea18118f3c4e72b1ea8c6de602a7ad4a41dbe0680361e1b1e9de5e42cb2007f7ca54b9e0d57ed13938fad56d3f19e57513a8fce039"
+      }
+    ],
+    "task": "fail_sign"
+  }
+}
