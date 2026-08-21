@@ -2779,7 +2779,10 @@ SP_375_REJECTIONS = {
     'origin_script_mismatch_p2tr': SP_NOT_OURS,
     'foreign_origin': SP_NOT_OURS,
     'invalid_dleq_proof': SP_BAD_PROOFS,
-    'wrong_k_assignment': SP_NO_DERIVE,
+    # A wrong k gives an output script that is not the one BIP375 derives, which
+    # wally folds into the same INVALID status as a bad proof, so this is as
+    # specific as Jade can be about it
+    'wrong_k_assignment': SP_BAD_PROOFS,
     'scan_key_coverage_gap': SP_NOT_OURS,
 }
 
