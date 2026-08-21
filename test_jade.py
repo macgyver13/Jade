@@ -82,6 +82,9 @@ def _h2b_test_case(testcase):
             if k in testcase:
                 testcase[k] = h2b(testcase[k])
 
+    elif 'psbt' in testcase['input']:
+        testcase['input']['psbt'] = base64.b64decode(testcase['input']['psbt'])
+
     elif 'message' in testcase['input']:
         # sign-msg test data
         if 'ae_host_commitment' in testcase['input']:
