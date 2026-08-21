@@ -368,6 +368,17 @@ MULTI_REG_BAD_FILE_TESTS = 'multisig_bad_file_*.json'
 DESCRIPTOR_REG_TESTS = 'descriptor_*.json'
 DESCRIPTOR_REG_SS_TESTS = 'descriptor_ss_*.json'
 SIGN_IDENTITY_TESTS = 'identity_*.json'
+SIGN_TXN_TESTS = 'txn_*.json'
+SIGN_TXN_FAIL_CASES = 'badtxn_*.json'
+SIGN_LIQUID_TXN_TESTS = 'liquid_txn_*.json'
+SIGN_TXN_SS_TESTS = 'tx_ss_*.json'
+SIGN_TXN_SS_BAD_TESTS = 'tx_ss_bad_*.json'
+SIGN_LIQUID_TXN_SS_TESTS = 'tx_liquid_ss*.json'
+SIGN_PSBT_TESTS = 'psbt_tm_*.json'
+SIGN_PSET_TESTS = 'pset_tm_*.json'
+SIGN_PSBT_SS_TESTS = 'psbt_ss_*.json'
+SIGN_PSET_SS_TESTS = 'pset_ss_*.json'
+SIGN_PSBT_SP_375_TESTS = 'psbt_sp_375_*.json'
 
 TEST_SCRIPT = h2b('76a9145f4fcd4a757c2abf6a0691f59dffae18852bbd7388ac')
 
@@ -2739,6 +2750,139 @@ def _check_silent_payment_psbt(psbt, silent_payment_info):
     return script, globals_by_key[b'\x08' + scan_key]
 
 
+# What Jade answers for each psbt_sp_375_* rejection vector, keyed by the id the
+# vector carries. The vectors hold no error strings of their own, so the corpus
+# says what a case is and this map says what Jade should make of it, and neither
+# can drift into the other.
+#
+# resolved_output_modifiable is refused by libwally while deserialising, so it
+# never reaches the silent payment code and reports the generic parse failure.
+SP_NOT_OURS = "This wallet owns none of the silent payment's eligible inputs"
+SP_BAD_PROOFS = 'Silent payment ECDH shares or DLEQ proofs are invalid'
+SP_NO_DERIVE = 'Failed to derive silent payment outputs, or a proposed script did not match'
+
+SP_375_REJECTIONS = {
+    'foreign_inputs_only': SP_NOT_OURS,
+    'ineligible_p2sh': SP_BAD_PROOFS,
+    'ineligible_nums_taproot': SP_BAD_PROOFS,
+    'sighash_not_all': 'Silent payments require SIGHASH_ALL',
+    'segwit_v2_input': 'Silent payments do not support Segwit versions above 1',
+    'resolved_output_modifiable': 'Failed to extract psbt from passed bytes',
+    'resolved_without_shares': SP_BAD_PROOFS,
+    # A silent payment output with no amount leaves the transaction paying
+    # nothing, which the fee confirmation used to assert on rather than refuse
+    'output_amount_missing': 'Transaction inputs and outputs must have value',
+    'input_utxo_missing': 'Silent payment input utxo missing',
+    'origin_script_mismatch_p2wpkh': SP_NOT_OURS,
+    'origin_script_mismatch_p2pkh': SP_NOT_OURS,
+    'origin_script_mismatch_p2sh_p2wpkh': SP_NOT_OURS,
+    'origin_script_mismatch_p2tr': SP_NOT_OURS,
+    'foreign_origin': SP_NOT_OURS,
+    'invalid_dleq_proof': SP_BAD_PROOFS,
+    # A wrong k gives an output script that is not the one BIP375 derives, which
+    # wally folds into the same INVALID status as a bad proof, so this is as
+    # specific as Jade can be about it
+    'wrong_k_assignment': SP_BAD_PROOFS,
+    'scan_key_coverage_gap': SP_NOT_OURS,
+    # The wallet owns an input here, so ownership is not the complaint: the
+    # foreign input's keypath names a key its prevout does not pay to, which
+    # leaves the share proven against that key bound to nothing
+    'foreign_pubkey_not_bound_to_prevout': SP_BAD_PROOFS,
+}
+
+
+def _find_sp_share(globals_by_key, inputs, scan_key):
+    """A share covering a scan key, held globally or on any single input."""
+    if b'\x07' + scan_key in globals_by_key:
+        return globals_by_key[b'\x07' + scan_key], globals_by_key[b'\x08' + scan_key]
+    for fields in inputs:
+        by_key = dict(fields)
+        if b'\x1d' + scan_key in by_key:
+            return by_key[b'\x1d' + scan_key], by_key[b'\x1e' + scan_key]
+    return None, None
+
+
+def _psbt_is_signed(psbt):
+    """Whether any input carries a signature, ecdsa or taproot keypath."""
+    _globals, inputs, _outputs = _parse_psbt_maps(psbt)
+    return any(key[:1] in (b'\x02', b'\x13') for fields in inputs for key, _ in fields)
+
+
+def _check_sp_375_resolved(psbt, expected_scripts):
+    """Jade derived every silent payment output, and proved it did."""
+    globals_, inputs, outputs = _parse_psbt_maps(psbt)
+    globals_by_key = dict(globals_)
+    # BIP375 requires a psbt with resolved outputs to be unmodifiable
+    assert globals_by_key.get(b'\x06', b'\x00') == b'\x00', 'resolved psbt is still modifiable'
+
+    for expected in expected_scripts:
+        index = expected['output_index']
+        output = dict(outputs[index])
+        derived = output[b'\x04']
+        assert derived == h2b(expected['script']), \
+            f'output {index}: Jade derived {derived.hex()}, expected {expected["script"]}'
+        scan_key = output[b'\x09'][:33]
+        share, proof = _find_sp_share(globals_by_key, inputs, scan_key)
+        assert share and len(share) == 33, f'output {index}: no ECDH share for its scan key'
+        assert proof and len(proof) == 64, f'output {index}: no DLEQ proof for its scan key'
+
+
+def _check_sp_375_contribution(psbt, expected):
+    """Jade owns only some eligible inputs, so it contributes and stops short."""
+    _globals, inputs, outputs = _parse_psbt_maps(psbt)
+    shared = expected['share_input_indices']
+    for index, fields in enumerate(inputs):
+        has_share = any(key[:1] == b'\x1d' for key, _ in fields)
+        assert has_share == (index in shared), \
+            f'input {index}: share {"present" if has_share else "missing"} unexpectedly'
+        # Nothing may be signed while an output is still unresolved
+        assert not any(key[:1] in (b'\x02', b'\x13') for key, _ in fields), \
+            f'input {index}: signed during a contribution'
+    for index in expected['unresolved_output_indices']:
+        assert b'\x04' not in dict(outputs[index]), f'output {index}: resolved by a contribution'
+
+
+def test_silent_payment_375_vectors(jadeapi):
+    """Run the generated BIP375 corpus, which is keyed to this test mnemonic.
+
+    Rejections are checked against SP_375_REJECTIONS rather than anything in the
+    vector, so a case cannot be rejected for the wrong reason and still pass.
+    Every mismatch is collected so one run reports them all.
+    """
+    mismatches, seen = [], 0
+    for testcase in _get_test_cases(SIGN_PSBT_SP_375_TESTS):
+        seen += 1
+        vector_id = testcase.get('id')
+        assert vector_id, f'{testcase["description"]}: vector carries no id'
+        network, psbt = testcase['input']['network'], testcase['input']['psbt']
+
+        if testcase['validation_result'] == 'valid':
+            signed = jadeapi.sign_psbt(network, psbt)
+            if 'expected_scripts' in testcase:
+                _check_sp_375_resolved(signed, testcase['expected_scripts'])
+            else:
+                _check_sp_375_contribution(signed, testcase['expected_contribution'])
+            continue
+
+        expected = SP_375_REJECTIONS.get(vector_id, '<unmapped>')
+        try:
+            signed = jadeapi.sign_psbt(network, psbt)
+            # Whether it was signed says how bad an acceptance is: a psbt handed
+            # back untouched is a lesser thing than one Jade put a signature on
+            state = 'signed' if _psbt_is_signed(signed) else 'returned unsigned'
+            mismatches.append((vector_id, expected, f'ACCEPTED - {state}'))
+        except JadeError as err:
+            if err.message != expected:
+                mismatches.append((vector_id, expected, err.message))
+
+    assert seen, 'No psbt_sp_375_* vectors found'
+    if mismatches:
+        width = max(len(row[0]) for row in mismatches)
+        report = '\n'.join(f'  {i:<{width}}  expected: {e}\n  {"":<{width}}  actual:   {a}'
+                           for i, e, a in mismatches)
+        assert False, f'{len(mismatches)} of {seen} BIP375 vectors disagree:\n{report}'
+
+
 def test_silent_payment_roundtrip(jadeapi, network='localtest'):
     """Pay Jade's own silent payment address, then scan for the payment.
 
@@ -2862,8 +3006,7 @@ def test_silent_payment_sign_psbt(jadeapi):
         jadeapi.sign_psbt(network, _serialize_psbt_maps(globals_, inputs, outputs))
         assert False, 'Silent payment psbt with a mismatching proposed script accepted'
     except JadeError as err:
-        expected = 'Failed to derive silent payment outputs, or a proposed script did not match'
-        assert err.message == expected, err.message
+        assert err.message == SP_NO_DERIVE, err.message
 
     # An output script on every silent payment output makes the psbt claim to
     # be resolved, which BIP375 requires ECDH shares to accompany. It has none.
@@ -3471,6 +3614,7 @@ def run_api_tests(jadeapi, isble, qemu, authuser=False):
     # - Negative test cases (invalid PSBTs)
     test_sign_psbt(jadeapi, SIGN_PSBT_SS_TESTS, has_psram)
     test_silent_payment_sign_psbt(jadeapi)
+    test_silent_payment_375_vectors(jadeapi)
     if not args.json_filter:
         test_silent_payment_roundtrip(jadeapi)
         test_silent_payment_collaborative_roundtrip(jadeapi)

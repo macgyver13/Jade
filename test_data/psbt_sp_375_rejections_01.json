@@ -1,0 +1,35 @@
+{
+  "id": "ineligible_p2sh",
+  "description": "P2SH-only input is not silent-payment eligible",
+  "input": {
+    "network": "localtest",
+    "psbt": "cHNidP8BAgQCAAAAAQQBAQEFAQEBBgEAAfsEAgAAAAABAFMCAAAAAXyoMfPUiQn+aMsOqqoR+Hc97n6McwhTN1kOJLsGOQ20AAAAAAD/////AaCGAQAAAAAAF6kU2OZohxTu7Qqi7dSJqhyjwXFwHk2HAAAAACICAnpHklPQCiBaEKlDjzcgGbnzZOCoNoAL+Dnb0o585rlVSDBFAiEAhhj2zjmDg57p8XJorDiWxQM8JaqG8ZRKmiDI/E2yjRECIGL+ClmWrYkJKUa7DCzYfa9/lNBc7g2mRcsuMHDNM77HASICAr5Ar99ismPLfe4rmF0cOP5BsZlNKwUHU0PRcsIY6rHERzBEAiAigmXJMNcU/xgJ3IA18tjP8jCDq/2codoK6Ou+cNKBAgIgddPQi2NIMtmvNVqHvdwDjg3NdjvfOIGF16cBLwEA3T8BAQRHUiECvkCv32KyY8t97iuYXRw4/kGxmU0rBQdTQ9FywhjqscQhAnpHklPQCiBaEKlDjzcgGbnzZOCoNoAL+Dnb0o585rlVUq4BDiDNOBpFUI/j2cq2O34PcEoPVp2/1VqYEC2eozruYht19AEPBAAAAAABEAT+////AAEDCBhzAQAAAAAAAQlCAnpIf8Gft2mHe4dC1uoYEY88TnKx6oxt5gKnrUpB2+BoA2HhseneXkLLIAf3ylS54NV+0Tk4+tVtPxnldROo/OA5AA=="
+  },
+  "validation_result": "invalid",
+  "key_profile": "jade",
+  "supplementary": {
+    "hex": "70736274ff0102040200000001040101010501010106010001fb04020000000001005302000000017ca831f3d48909fe68cb0eaaaa11f8773dee7e8c73085337590e24bb06390db40000000000ffffffff01a08601000000000017a914d8e6688714eeed0aa2edd489aa1ca3c171701e4d87000000002202027a479253d00a205a10a9438f372019b9f364e0a836800bf839dbd28e7ce6b9554830450221008618f6ce3983839ee9f17268ac3896c5033c25aa86f1944a9a20c8fc4db28d11022062fe0a5996ad89092946bb0c2cd87daf7f94d05cee0da645cb2e3070cd33bec701220202be40afdf62b263cb7dee2b985d1c38fe41b1994d2b05075343d172c218eab1c44730440220228265c930d714ff1809dc8035f2d8cff23083abfd9ca1da0ae8ebbe70d28102022075d3d08b634832d9af355a87bddc038e0dcd763bdf388185d7a7012f0100dd3f01010447522102be40afdf62b263cb7dee2b985d1c38fe41b1994d2b05075343d172c218eab1c421027a479253d00a205a10a9438f372019b9f364e0a836800bf839dbd28e7ce6b95552ae010e20cd381a45508fe3d9cab63b7e0f704a0f569dbfd55a98102d9ea33aee621b75f4010f0400000000011004feffffff000103081873010000000000010942027a487fc19fb769877b8742d6ea18118f3c4e72b1ea8c6de602a7ad4a41dbe0680361e1b1e9de5e42cb2007f7ca54b9e0d57ed13938fad56d3f19e57513a8fce03900",
+    "inputs": [
+      {
+        "input_index": 0,
+        "private_key": "",
+        "public_key": "",
+        "prevout_txid": "f4751b62ee3aa39e2d10985ad5bf9d560f4a700f7e3bb6cad9e38f50451a38cd",
+        "prevout_index": 0,
+        "amount": 100000,
+        "non_witness_utxo": "02000000017ca831f3d48909fe68cb0eaaaa11f8773dee7e8c73085337590e24bb06390db40000000000ffffffff01a08601000000000017a914d8e6688714eeed0aa2edd489aa1ca3c171701e4d8700000000",
+        "sequence": 4294967294,
+        "signed": true
+      }
+    ],
+    "sp_proofs": [],
+    "outputs": [
+      {
+        "output_index": 0,
+        "amount": 95000,
+        "sp_v0_info": "027a487fc19fb769877b8742d6ea18118f3c4e72b1ea8c6de602a7ad4a41dbe0680361e1b1e9de5e42cb2007f7ca54b9e0d57ed13938fad56d3f19e57513a8fce039"
+      }
+    ],
+    "task": "fail_sign"
+  }
+}

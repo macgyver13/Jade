@@ -1,0 +1,46 @@
+{
+  "id": "origin_script_mismatch_p2pkh",
+  "description": "A Jade origin must match its P2PKH UTXO script",
+  "input": {
+    "network": "localtest",
+    "psbt": "cHNidP8BAgQCAAAAAQQBAQEFAQEBBgEAAfsEAgAAAAABAFUCAAAAAcm/BBHgTerRUAB8oAUIB0/QSGi4nXvtlDACIxd4fYJ7AAAAAAD/////AaCGAQAAAAAAGXapFGHdORo8daakGkiGCAeKS0gfNEr0iKwAAAAAIgYDvDda3DgDCStZZ87Zk2pIOCv7qT1qQo+fyIaspDofxg0YWdHzsCwAAIABAACAAAAAgAAAAAAAAAAAAQ4g/XktOqHjaltvzgwTMHDatv7pBSyLEo65LVvtNBO1/sgBDwQAAAAAARAE/v///wABAwgYcwEAAAAAAAEJQgJ6SH/Bn7dph3uHQtbqGBGPPE5yseqMbeYCp61KQdvgaANh4bHp3l5CyyAH98pUueDVftE5OPrVbT8Z5XUTqPzgOQA="
+  },
+  "validation_result": "invalid",
+  "key_profile": "jade",
+  "supplementary": {
+    "hex": "70736274ff0102040200000001040101010501010106010001fb0402000000000100550200000001c9bf0411e04dead150007ca00508074fd04868b89d7bed9430022317787d827b0000000000ffffffff01a0860100000000001976a91461dd391a3c75a6a41a488608078a4b481f344af488ac00000000220603bc375adc3803092b5967ced9936a48382bfba93d6a428f9fc886aca43a1fc60d1859d1f3b02c00008001000080000000800000000000000000010e20fd792d3aa1e36a5b6fce0c133070dab6fee9052c8b128eb92d5bed3413b5fec8010f0400000000011004feffffff000103081873010000000000010942027a487fc19fb769877b8742d6ea18118f3c4e72b1ea8c6de602a7ad4a41dbe0680361e1b1e9de5e42cb2007f7ca54b9e0d57ed13938fad56d3f19e57513a8fce03900",
+    "inputs": [
+      {
+        "input_index": 0,
+        "private_key": "90b5a0dd3c4639e79780d080e6d1eef32388c4d7ab628ee8a2ed04ebcce2a8c9",
+        "public_key": "03bc375adc3803092b5967ced9936a48382bfba93d6a428f9fc886aca43a1fc60d",
+        "prevout_txid": "c8feb51334ed5b2db98e128b2c05e9feb6da7030130cce6f5b6ae3a13a2d79fd",
+        "prevout_index": 0,
+        "amount": 100000,
+        "non_witness_utxo": "0200000001c9bf0411e04dead150007ca00508074fd04868b89d7bed9430022317787d827b0000000000ffffffff01a0860100000000001976a91461dd391a3c75a6a41a488608078a4b481f344af488ac00000000",
+        "sequence": 4294967294,
+        "signed": false,
+        "owner": "wallet",
+        "master_fingerprint": "59d1f3b0",
+        "derivation_path": [
+          2147483692,
+          2147483649,
+          2147483648,
+          0,
+          0
+        ],
+        "derivation_private_key": "90b5a0dd3c4639e79780d080e6d1eef32388c4d7ab628ee8a2ed04ebcce2a8c9",
+        "derivation_public_key": "03bc375adc3803092b5967ced9936a48382bfba93d6a428f9fc886aca43a1fc60d"
+      }
+    ],
+    "sp_proofs": [],
+    "outputs": [
+      {
+        "output_index": 0,
+        "amount": 95000,
+        "sp_v0_info": "027a487fc19fb769877b8742d6ea18118f3c4e72b1ea8c6de602a7ad4a41dbe0680361e1b1e9de5e42cb2007f7ca54b9e0d57ed13938fad56d3f19e57513a8fce039"
+      }
+    ],
+    "task": "fail_sign"
+  }
+}

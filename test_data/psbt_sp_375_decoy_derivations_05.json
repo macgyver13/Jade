@@ -1,0 +1,53 @@
+{
+  "id": "decoy_tap_leaf_p2tr",
+  "description": "Jade resolves a P2TR input carrying a script-path derivation",
+  "input": {
+    "network": "localtest",
+    "psbt": "cHNidP8BAgQCAAAAAQQBAQEFAQEBBgEAAfsEAgAAAAABASughgEAAAAAACJRILcap5yrCuLYO4LUTL3CP13Mo3l+i6YixORaj33OKLoOAQ4grcHSHN4au1ZR+I/TZI93Wg50NSlu08GD3f6mE+1PARgBDwQAAAAAARAE/v///yEWGHNcjlN3hqXDoKTOApkPD1PkLLk8bBVe+FDWzF1HNuspAb0tdVDgHU2lo7fm84HscDDwK21zCRwhIQSAKSpcnmwTAAAAgP8AAAAhFvZYCC1/XsRm1hIgrtFCk5HXvt+PA0KMnX5AYtgONzRaGQBZ0fOwVgAAgAEAAIAAAACAAAAAAAAAAAABFyD2WAgtf17EZtYSIK7RQpOR177fjwNCjJ1+QGLYDjc0WgABAwgYcwEAAAAAAAEJQgJ6SH/Bn7dph3uHQtbqGBGPPE5yseqMbeYCp61KQdvgaANh4bHp3l5CyyAH98pUueDVftE5OPrVbT8Z5XUTqPzgOQA="
+  },
+  "validation_result": "valid",
+  "key_profile": "jade",
+  "expected_scripts": [
+    {
+      "output_index": 0,
+      "script": "51202f809e0ba436fb892930b548a9b1c70ea1adee1a18b408b41866bf33a552fd6a"
+    }
+  ],
+  "supplementary": {
+    "hex": "70736274ff0102040200000001040101010501010106010001fb04020000000001012ba086010000000000225120b71aa79cab0ae2d83b82d44cbdc23f5dcca3797e8ba622c4e45a8f7dce28ba0e010e20adc1d21cde1abb5651f88fd3648f775a0e7435296ed3c183ddfea613ed4f0118010f0400000000011004feffffff211618735c8e537786a5c3a0a4ce02990f0f53e42cb93c6c155ef850d6cc5d4736eb2901bd2d7550e01d4da5a3b7e6f381ec7030f02b6d73091c21210480292a5c9e6c1300000080ff0000002116f658082d7f5ec466d61220aed1429391d7bedf8f03428c9d7e4062d80e37345a190059d1f3b05600008001000080000000800000000000000000011720f658082d7f5ec466d61220aed1429391d7bedf8f03428c9d7e4062d80e37345a000103081873010000000000010942027a487fc19fb769877b8742d6ea18118f3c4e72b1ea8c6de602a7ad4a41dbe0680361e1b1e9de5e42cb2007f7ca54b9e0d57ed13938fad56d3f19e57513a8fce03900",
+    "inputs": [
+      {
+        "input_index": 0,
+        "private_key": "971579cf78f36a7c2b5c90ddf318f362871f8c1e5bf1c0bcab655772b869f640",
+        "public_key": "02b71aa79cab0ae2d83b82d44cbdc23f5dcca3797e8ba622c4e45a8f7dce28ba0e",
+        "prevout_txid": "18014fed13a6fedd83c1d36e2935740e5a778f64d38ff85156bb1ade1cd2c1ad",
+        "prevout_index": 0,
+        "amount": 100000,
+        "non_witness_utxo": "020000000113f106b64b57b5b1376f9f6c47190f40cc06b3bedcb8aaba97850ab3d7f67d020000000000ffffffff01a086010000000000225120b71aa79cab0ae2d83b82d44cbdc23f5dcca3797e8ba622c4e45a8f7dce28ba0e00000000",
+        "witness_utxo": "a086010000000000225120b71aa79cab0ae2d83b82d44cbdc23f5dcca3797e8ba622c4e45a8f7dce28ba0e",
+        "sequence": 4294967294,
+        "signed": false,
+        "owner": "wallet",
+        "master_fingerprint": "59d1f3b0",
+        "derivation_path": [
+          2147483734,
+          2147483649,
+          2147483648,
+          0,
+          0
+        ],
+        "derivation_private_key": "fbfe896b002b1e98fc9f8aae4479760d3fd9f145bdaa9b6da59cb069cdc7539b",
+        "derivation_public_key": "03f658082d7f5ec466d61220aed1429391d7bedf8f03428c9d7e4062d80e37345a"
+      }
+    ],
+    "sp_proofs": [],
+    "outputs": [
+      {
+        "output_index": 0,
+        "amount": 95000,
+        "sp_v0_info": "027a487fc19fb769877b8742d6ea18118f3c4e72b1ea8c6de602a7ad4a41dbe0680361e1b1e9de5e42cb2007f7ca54b9e0d57ed13938fad56d3f19e57513a8fce039"
+      }
+    ],
+    "task": "sign"
+  }
+}
