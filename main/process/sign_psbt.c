@@ -55,6 +55,23 @@ static const uint8_t PSET_MAGIC_PREFIX[5] = { 0x70, 0x73, 0x65, 0x74, 0xFF }; //
 //       return false. Signing still works correctly, but the additional
 //       validation is skipped as the tx is treated as non-Green standard 2of3.
 //       The Green wallets based on gdk provide the short path for 2of3 PSBTs.
+// Whether the key the iterator is on spends this prevout on its own, ie. the
+// input is singlesig however many keys it happens to name
+static bool is_singlesig_prevout(
+    const network_t network_id, const key_iter* iter, const struct wally_tx_output* utxo)
+{
+    JADE_ASSERT(network_id != NETWORK_NONE);
+    JADE_ASSERT(iter && iter->is_valid);
+
+    size_t script_type = WALLY_SCRIPT_TYPE_UNKNOWN;
+    script_variant_t script_variant;
+    return utxo && utxo->script && utxo->script_len
+        && wally_scriptpubkey_get_type(utxo->script, utxo->script_len, &script_type) == WALLY_OK
+        && get_singlesig_variant_from_script_type(script_type, &script_variant)
+        && wallet_verify_singlesig_script_matches(
+            network_id, script_variant, &iter->hdkey, utxo->script, utxo->script_len);
+}
+
 static bool is_green_multisig_signers(const network_t network_id, const key_iter* iter, struct ext_key* recovery_hdkey)
 {
     JADE_ASSERT(network_id != NETWORK_NONE);
@@ -882,8 +899,14 @@ int sign_psbt(jade_process_t* process, CborValue* params, const network_t networ
             goto cleanup;
         }
 
+        // How many keys an input names does not say how many signers it has:
+        // BIP375 has the updater publish input pubkeys as derivations, so a
+        // singlesig input can name several. Ask whether the key we hold
+        // reproduces the prevout as a singlesig script. A real multisig prevout
+        // is p2wsh or p2sh-p2wsh, which has no singlesig variant, so it still
+        // takes the multisig path.
         const size_t num_keys = key_iter_get_num_keys(&iter);
-        if (num_keys > 1) {
+        if (num_keys > 1 && !is_singlesig_prevout(network_id, &iter, utxo)) {
             const bool is_green = is_green_multisig_signers(network_id, &iter, NULL);
             signing_flags |= is_green ? PSBT_SIGNING_GREEN_MULTISIG : PSBT_SIGNING_MULTISIG;
         } else {
