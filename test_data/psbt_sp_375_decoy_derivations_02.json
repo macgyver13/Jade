@@ -1,0 +1,53 @@
+{
+  "id": "decoy_foreign_origin_p2sh_p2wpkh",
+  "description": "Jade resolves a P2SH-P2WPKH input carrying a decoy derivation first",
+  "input": {
+    "network": "localtest",
+    "psbt": "cHNidP8BAgQCAAAAAQQBAQEFAQEBBgEAAfsEAgAAAAABAFMCAAAAAa0yiGinxhSdpSUXfZUerAPh/iyT6DzlNGVjrZNjwndMAAAAAAD/////AaCGAQAAAAAAF6kU/Bq89rZIroe3fyG/8JEA0sPNWjmHAAAAAAEBIKCGAQAAAAAAF6kU/Bq89rZIroe3fyG/8JEA0sPNWjmHAQQWABTl4Gwo1QiI/RV2vVuaG+HZjgZa/iIGAxhzXI5Td4alw6CkzgKZDw9T5Cy5PGwVXvhQ1sxdRzbrCAAAAID/AAAAIgYDrczRJueYpfux4IxXwMKh3QkEeRBmVxpRsYA3BW2rn5AYWdHzsDEAAIABAACAAAAAgAAAAAAAAAAAAQ4gAIgGLo1YnBn06IJoRi8iCg88RojUzKDZb0FaXJf/JCoBDwQAAAAAARAE/v///wABAwgYcwEAAAAAAAEJQgJ6SH/Bn7dph3uHQtbqGBGPPE5yseqMbeYCp61KQdvgaANh4bHp3l5CyyAH98pUueDVftE5OPrVbT8Z5XUTqPzgOQA="
+  },
+  "validation_result": "valid",
+  "key_profile": "jade",
+  "expected_scripts": [
+    {
+      "output_index": 0,
+      "script": "512022ab9bb52a3af1b718c9c0016b0f185fdf47fc1b45bc8d312a367328c2180f7e"
+    }
+  ],
+  "supplementary": {
+    "hex": "70736274ff0102040200000001040101010501010106010001fb0402000000000100530200000001ad328868a7c6149da525177d951eac03e1fe2c93e83ce5346563ad9363c2774c0000000000ffffffff01a08601000000000017a914fc1abcf6b648ae87b77f21bff09100d2c3cd5a398700000000010120a08601000000000017a914fc1abcf6b648ae87b77f21bff09100d2c3cd5a39870104160014e5e06c28d50888fd1576bd5b9a1be1d98e065afe22060318735c8e537786a5c3a0a4ce02990f0f53e42cb93c6c155ef850d6cc5d4736eb0800000080ff000000220603adccd126e798a5fbb1e08c57c0c2a1dd0904791066571a51b18037056dab9f901859d1f3b03100008001000080000000800000000000000000010e200088062e8d589c19f4e88268462f220a0f3c4688d4cca0d96f415a5c97ff242a010f0400000000011004feffffff000103081873010000000000010942027a487fc19fb769877b8742d6ea18118f3c4e72b1ea8c6de602a7ad4a41dbe0680361e1b1e9de5e42cb2007f7ca54b9e0d57ed13938fad56d3f19e57513a8fce03900",
+    "inputs": [
+      {
+        "input_index": 0,
+        "private_key": "0ce5f07a2d97935e1032825a0cc60f6aae19469320e88d1f1506cc992182cc54",
+        "public_key": "03adccd126e798a5fbb1e08c57c0c2a1dd0904791066571a51b18037056dab9f90",
+        "prevout_txid": "2a24ff975c5a416fd9a0ccd488463c0f0a222f466882e8f4199c588d2e068800",
+        "prevout_index": 0,
+        "amount": 100000,
+        "non_witness_utxo": "0200000001ad328868a7c6149da525177d951eac03e1fe2c93e83ce5346563ad9363c2774c0000000000ffffffff01a08601000000000017a914fc1abcf6b648ae87b77f21bff09100d2c3cd5a398700000000",
+        "witness_utxo": "a08601000000000017a914fc1abcf6b648ae87b77f21bff09100d2c3cd5a3987",
+        "sequence": 4294967294,
+        "signed": false,
+        "owner": "wallet",
+        "master_fingerprint": "59d1f3b0",
+        "derivation_path": [
+          2147483697,
+          2147483649,
+          2147483648,
+          0,
+          0
+        ],
+        "derivation_private_key": "0ce5f07a2d97935e1032825a0cc60f6aae19469320e88d1f1506cc992182cc54",
+        "derivation_public_key": "03adccd126e798a5fbb1e08c57c0c2a1dd0904791066571a51b18037056dab9f90"
+      }
+    ],
+    "sp_proofs": [],
+    "outputs": [
+      {
+        "output_index": 0,
+        "amount": 95000,
+        "sp_v0_info": "027a487fc19fb769877b8742d6ea18118f3c4e72b1ea8c6de602a7ad4a41dbe0680361e1b1e9de5e42cb2007f7ca54b9e0d57ed13938fad56d3f19e57513a8fce039"
+      }
+    ],
+    "task": "sign"
+  }
+}
