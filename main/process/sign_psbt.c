@@ -1089,6 +1089,13 @@ int sign_psbt(jade_process_t* process, CborValue* params, const network_t networ
             retval = CBOR_RPC_BAD_PARAMETERS;
             goto cleanup;
         }
+        // The fee confirmation requires both totals to be non-zero, so refuse a
+        // valueless transaction here rather than assert while showing it
+        if (!input_amount || !output_amount) {
+            *errmsg = "Transaction inputs and outputs must have value";
+            retval = CBOR_RPC_BAD_PARAMETERS;
+            goto cleanup;
+        }
 
         if (!show_btc_transaction_outputs_activity(network_id, tx, output_info)) {
             *errmsg = "User declined to sign psbt";

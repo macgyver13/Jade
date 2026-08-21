@@ -853,6 +853,16 @@ static void sign_tx_impl(jade_process_t* process, const bool for_liquid)
                 process, CBOR_RPC_BAD_PARAMETERS, "Total input amounts less than total output amounts");
             goto cleanup;
         }
+        // The fee confirmation requires both totals to be non-zero, so refuse a
+        // valueless transaction here rather than assert while showing it
+        if (!input_amount || !output_amount) {
+            if (use_ae_signatures) {
+                jade_process_load_in_message(process, true);
+            }
+            jade_process_reject_message(
+                process, CBOR_RPC_BAD_PARAMETERS, "Transaction inputs and outputs must have value");
+            goto cleanup;
+        }
 
         // User to agree fee amount
         // If user cancels we'll send the 'cancelled' error response for the last input message only
