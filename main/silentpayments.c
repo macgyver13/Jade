@@ -490,6 +490,13 @@ static bool sp_check_psbt(const struct wally_psbt* psbt, size_t* sp_status, cons
             *errmsg = "Silent payments require SIGHASH_ALL";
             return false;
         }
+        // Without the prevout wally cannot classify the input, and reports that
+        // no differently from bad shares. Say what is actually missing.
+        const struct wally_tx_output* utxo = NULL;
+        if (wally_psbt_get_input_best_utxo(psbt, i, &utxo) != WALLY_OK || !utxo) {
+            *errmsg = "Silent payment input utxo missing";
+            return false;
+        }
     }
 
     const int status_ret = wally_psbt_get_sp_status(psbt, 0, sp_status);
