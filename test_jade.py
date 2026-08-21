@@ -2784,6 +2784,10 @@ SP_375_REJECTIONS = {
     # specific as Jade can be about it
     'wrong_k_assignment': SP_BAD_PROOFS,
     'scan_key_coverage_gap': SP_NOT_OURS,
+    # The wallet owns an input here, so ownership is not the complaint: the
+    # foreign input's keypath names a key its prevout does not pay to, which
+    # leaves the share proven against that key bound to nothing
+    'foreign_pubkey_not_bound_to_prevout': SP_BAD_PROOFS,
 }
 
 
