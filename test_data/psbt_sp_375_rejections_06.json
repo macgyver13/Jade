@@ -1,0 +1,9 @@
+{
+  "id": "resolved_without_shares",
+  "description": "Resolved output without shares or proofs is invalid",
+  "input": {
+    "network": "localtest",
+    "psbt": "cHNidP8BAgQCAAAAAQQBAQEFAQEBBgEAAfsEAgAAAAABAR+ghgEAAAAAABYAFDSWLUEqVomqEjNymRZhyDeKUy1hIgIC6nmVbWoYQJHE2uF3iwzr8o+suHwRi35Wyy/ZT8RCwUBIMEUCIQCHz9uQ7L3qLP7oLYMtkCYyc3dwja+HvsMBxCNRGRls9AIgOomF32assuMYCFpIa08x0xpxcDCWysE78Zg0rifB0g4BAQMEAQAAACIGAup5lW1qGECRxNrhd4sM6/KPrLh8EYt+Vssv2U/EQsFAGFnR87BUAACAAQAAgAAAAIAAAAAAAAAAAAEOIA73r3qJmuDfoGdbZYjHhhp+CIQDBQCpKBoUwrtMETJEAQ8EAAAAAAEQBP7///8AAQMIGHMBAAAAAAABBCJRIHCaFQJbBcNEbbPU/QiXG4ow6egIgSoAZzRWdFkXXzzcAQlCAnpIf8Gft2mHe4dC1uoYEY88TnKx6oxt5gKnrUpB2+BoA2HhseneXkLLIAf3ylS54NV+0Tk4+tVtPxnldROo/OA5AA=="
+  },
+  "validation_result": "invalid"
+}

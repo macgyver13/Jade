@@ -1,0 +1,15 @@
+{
+  "id": "owned_p2sh_p2wpkh",
+  "description": "Jade resolves an owned P2SH-P2WPKH input",
+  "input": {
+    "network": "localtest",
+    "psbt": "cHNidP8BAgQCAAAAAQQBAQEFAQEBBgEAAfsEAgAAAAABAFMCAAAAAa0yiGinxhSdpSUXfZUerAPh/iyT6DzlNGVjrZNjwndMAAAAAAD/////AaCGAQAAAAAAF6kU/Bq89rZIroe3fyG/8JEA0sPNWjmHAAAAAAEBIKCGAQAAAAAAF6kU/Bq89rZIroe3fyG/8JEA0sPNWjmHAQQWABTl4Gwo1QiI/RV2vVuaG+HZjgZa/iIGA63M0SbnmKX7seCMV8DCod0JBHkQZlcaUbGANwVtq5+QGFnR87AxAACAAQAAgAAAAIAAAAAAAAAAAAEOIACIBi6NWJwZ9OiCaEYvIgoPPEaI1Myg2W9BWlyX/yQqAQ8EAAAAAAEQBP7///8AAQMIGHMBAAAAAAABCUICekh/wZ+3aYd7h0LW6hgRjzxOcrHqjG3mAqetSkHb4GgDYeGx6d5eQssgB/fKVLng1X7ROTj61W0/GeV1E6j84DkA"
+  },
+  "validation_result": "valid",
+  "expected_scripts": [
+    {
+      "output_index": 0,
+      "script": "512022ab9bb52a3af1b718c9c0016b0f185fdf47fc1b45bc8d312a367328c2180f7e"
+    }
+  ]
+}

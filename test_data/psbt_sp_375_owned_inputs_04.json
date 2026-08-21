@@ -1,0 +1,17 @@
+{
+  "id": "mixed_owned_foreign_contribution",
+  "description": "Jade contributes only its owned input to a mixed-input payment",
+  "input": {
+    "network": "localtest",
+    "psbt": "cHNidP8BAgQCAAAAAQQBAgEFAQEBBgEAAfsEAgAAAAABAR+ghgEAAAAAABYAFDSWLUEqVomqEjNymRZhyDeKUy1hAQMEAQAAACIGAup5lW1qGECRxNrhd4sM6/KPrLh8EYt+Vssv2U/EQsFAGFnR87BUAACAAQAAgAAAAIAAAAAAAAAAAAEOIA73r3qJmuDfoGdbZYjHhhp+CIQDBQCpKBoUwrtMETJEAQ8EAAAAAAEQBP7///8iHQJ6SH/Bn7dph3uHQtbqGBGPPE5yseqMbeYCp61KQdvgaCECzTL/c0k6QqiItcKuZVjMYqgMhTfk/QnhwhoGnQawRDEiHgJ6SH/Bn7dph3uHQtbqGBGPPE5yseqMbeYCp61KQdvgaEAdDC+Yna/Uydp6aV6cGqVKA8ucBXsuTjoakDUKk85PIiU1BMwVf5lnFIwZ1UANeE6mZ1ETaAjuos+G/L32MeEFAAEBH6CGAQAAAAAAFgAUDBWko+mBBK+/d/17klYWTUHTz+QiBgN5YtRbOOi8+C+o76hDKgHyDJpT4kx9PxHfGXy45wkm2hjerb7vVAAAgAEAAIAAAACAAAAAAAEAAAABDiDwvjHnWM5WMQWinw+yyp7qHqn/utJPqZ17CmzWSWgyTgEPBAAAAAABEAT+////AAEDCDDmAgAAAAAAAQlCAnpIf8Gft2mHe4dC1uoYEY88TnKx6oxt5gKnrUpB2+BoA2HhseneXkLLIAf3ylS54NV+0Tk4+tVtPxnldROo/OA5AA=="
+  },
+  "validation_result": "valid",
+  "expected_contribution": {
+    "share_input_indices": [
+      0
+    ],
+    "unresolved_output_indices": [
+      0
+    ]
+  }
+}
