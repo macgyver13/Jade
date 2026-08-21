@@ -2769,7 +2769,9 @@ SP_375_REJECTIONS = {
     'segwit_v2_input': 'Silent payments do not support Segwit versions above 1',
     'resolved_output_modifiable': 'Failed to extract psbt from passed bytes',
     'resolved_without_shares': SP_BAD_PROOFS,
-    'output_amount_missing': 'Silent Payment output amount missing',
+    # A silent payment output with no amount leaves the transaction paying
+    # nothing, which the fee confirmation used to assert on rather than refuse
+    'output_amount_missing': 'Transaction inputs and outputs must have value',
     'input_utxo_missing': 'Silent payment input utxo missing',
     'origin_script_mismatch_p2wpkh': SP_NOT_OURS,
     'origin_script_mismatch_p2pkh': SP_NOT_OURS,
@@ -2791,6 +2793,12 @@ def _find_sp_share(globals_by_key, inputs, scan_key):
         if b'\x1d' + scan_key in by_key:
             return by_key[b'\x1d' + scan_key], by_key[b'\x1e' + scan_key]
     return None, None
+
+
+def _psbt_is_signed(psbt):
+    """Whether any input carries a signature, ecdsa or taproot keypath."""
+    _globals, inputs, _outputs = _parse_psbt_maps(psbt)
+    return any(key[:1] in (b'\x02', b'\x13') for fields in inputs for key, _ in fields)
 
 
 def _check_sp_375_resolved(psbt, expected_scripts):
@@ -2851,8 +2859,11 @@ def test_silent_payment_375_vectors(jadeapi):
 
         expected = SP_375_REJECTIONS.get(vector_id, '<unmapped>')
         try:
-            jadeapi.sign_psbt(network, psbt)
-            mismatches.append((vector_id, expected, 'ACCEPTED - not rejected at all'))
+            signed = jadeapi.sign_psbt(network, psbt)
+            # Whether it was signed says how bad an acceptance is: a psbt handed
+            # back untouched is a lesser thing than one Jade put a signature on
+            state = 'signed' if _psbt_is_signed(signed) else 'returned unsigned'
+            mismatches.append((vector_id, expected, f'ACCEPTED - {state}'))
         except JadeError as err:
             if err.message != expected:
                 mismatches.append((vector_id, expected, err.message))
