@@ -46,15 +46,6 @@ static const uint8_t PSET_MAGIC_PREFIX[5] = { 0x70, 0x73, 0x65, 0x74, 0xFF }; //
 
 #define PSBT_OUT_CHUNK_SIZE (MAX_OUTPUT_MSG_SIZE - 64)
 
-// Check if the input corresponds to a green multisig input.
-// If identified as a Green input here, additional validation is done later.
-// NOTE: For 2of3 multisig inputs, if the users recovery path is a full path
-//       (from the root of the recovery mnemonic's key) instead of the path
-//       from the first parent key (m/3'/subaccount'), then this logic cannot
-//       determine which key is the user key vs the recovery key and so will
-//       return false. Signing still works correctly, but the additional
-//       validation is skipped as the tx is treated as non-Green standard 2of3.
-//       The Green wallets based on gdk provide the short path for 2of3 PSBTs.
 // Whether the key the iterator is on spends this prevout on its own, ie. the
 // input is singlesig however many keys it happens to name
 static bool is_singlesig_prevout(
@@ -72,6 +63,15 @@ static bool is_singlesig_prevout(
             network_id, script_variant, &iter->hdkey, utxo->script, utxo->script_len);
 }
 
+// Check if the input corresponds to a green multisig input.
+// If identified as a Green input here, additional validation is done later.
+// NOTE: For 2of3 multisig inputs, if the users recovery path is a full path
+//       (from the root of the recovery mnemonic's key) instead of the path
+//       from the first parent key (m/3'/subaccount'), then this logic cannot
+//       determine which key is the user key vs the recovery key and so will
+//       return false. Signing still works correctly, but the additional
+//       validation is skipped as the tx is treated as non-Green standard 2of3.
+//       The Green wallets based on gdk provide the short path for 2of3 PSBTs.
 static bool is_green_multisig_signers(const network_t network_id, const key_iter* iter, struct ext_key* recovery_hdkey)
 {
     JADE_ASSERT(network_id != NETWORK_NONE);
@@ -1080,6 +1080,13 @@ int sign_psbt(jade_process_t* process, CborValue* params, const network_t networ
         JADE_WALLY_VERIFY(wally_tx_get_total_output_satoshi(tx, &output_amount));
         if (output_amount > input_amount) {
             *errmsg = "Total input amounts less than total output amounts";
+            retval = CBOR_RPC_BAD_PARAMETERS;
+            goto cleanup;
+        }
+        // The fee confirmation requires both totals to be non-zero, so refuse a
+        // valueless transaction here rather than assert while showing it
+        if (!input_amount || !output_amount) {
+            *errmsg = "Transaction inputs and outputs must have value";
             retval = CBOR_RPC_BAD_PARAMETERS;
             goto cleanup;
         }
