@@ -12,10 +12,36 @@
 
 // Ensure a taproot input/output is single-key and keypath-only
 // (until taproots with scripts are supported)
+// Whether the keypath at 'index' belongs to a tapscript leaf, ie. is a script
+// path key rather than the key the input is spent with
+static bool key_iter_names_leaf(const key_iter* iter, const struct wally_map* keypaths, const size_t index)
+{
+    const struct wally_map* const leaf_hashes = iter->is_input
+        ? &iter->psbt->inputs[iter->index].taproot_leaf_hashes
+        : &iter->psbt->outputs[iter->index].taproot_leaf_hashes;
+    const struct wally_map_item* const keypath = &keypaths->items[index];
+    size_t found = 0;
+    if (wally_map_find(leaf_hashes, keypath->key, keypath->key_len, &found) != WALLY_OK || !found) {
+        return false; // No leaf hashes recorded for this key
+    }
+    return leaf_hashes->items[found - 1].value_len != 0;
+}
+
 static bool key_iter_is_supported_taproot(const key_iter* iter, const struct wally_map* keypaths)
 {
-    if (keypaths->num_items > 1) {
-        return false; // More than one keypath: a multisig script-path spend
+    // A taproot input may name script path keys alongside the key it is spent
+    // with. They are told apart by the leaf each names, not by how many there
+    // are: the key path key is the one belonging to no leaf. Requiring exactly
+    // one such key keeps this to single key, key path spends, which the leaf
+    // script and merkle root checks below confirm.
+    size_t num_keypath_keys = 0;
+    for (size_t i = 0; i < keypaths->num_items; ++i) {
+        if (!key_iter_names_leaf(iter, keypaths, i)) {
+            ++num_keypath_keys;
+        }
+    }
+    if (num_keypath_keys != 1) {
+        return false; // Not a single key, key path spend
     }
     if (iter->is_input) {
         const struct wally_psbt_input* input = &iter->psbt->inputs[iter->index];
@@ -143,6 +169,13 @@ bool key_iter_next(key_iter* iter)
 
         ret = get_key(keypaths, iter->key_index, &keychain_get()->xpriv, &iter->hdkey, &found_index);
         JADE_WALLY_VERIFY(ret);
+        // A taproot input can name script path keys we are able to derive, but
+        // none of them spends the key path, so skip past any we are handed
+        while (iter->is_taproot && found_index && key_iter_names_leaf(iter, keypaths, found_index - 1)) {
+            iter->key_index = found_index; // Resume after the key just rejected
+            ret = get_key(keypaths, iter->key_index, &keychain_get()->xpriv, &iter->hdkey, &found_index);
+            JADE_WALLY_VERIFY(ret);
+        }
         if (found_index == 0 && key_iter_get_num_keys(iter) == 3) {
             // Didn't match any of the 3 keys present: check Green 2of3 parent recovery key
             size_t path_len = 0;
