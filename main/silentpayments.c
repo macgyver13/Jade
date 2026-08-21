@@ -435,10 +435,23 @@ static bool sp_get_input_key(const network_t network_id, const struct wally_psbt
             && sp_validate_spend_key_path(network_id, iter, errmsg)
             && wally_psbt_get_input_sp_spend_key(psbt, index, &iter->hdkey, seckey, EC_PRIVATE_KEY_LEN) == WALLY_OK;
     }
-    if (!key_iter_input_begin(psbt, index, iter) || key_iter_get_num_keys(iter) != 1
-        || !get_singlesig_variant_from_script_type(script_type, &script_variant)
-        || !wallet_verify_singlesig_script_matches(
-            network_id, script_variant, &iter->hdkey, utxo->script, utxo->script_len)) {
+    if (!get_singlesig_variant_from_script_type(script_type, &script_variant)) {
+        return false;
+    }
+    // An input may name more than one key: BIP375 has the updater publish an
+    // input's pubkey as a derivation, since a p2pkh/p2sh-p2wpkh/p2wpkh script
+    // only commits to its hash. Take the key that reproduces the script being
+    // spent rather than counting the derivations, so a key we cannot spend
+    // with never decides whether this input is ours.
+    bool found = false;
+    if (key_iter_input_begin(psbt, index, iter)) {
+        do {
+            // Stop on the matching key, leaving the iterator on it for the caller
+            found = wallet_verify_singlesig_script_matches(
+                network_id, script_variant, &iter->hdkey, utxo->script, utxo->script_len);
+        } while (!found && key_iter_next(iter));
+    }
+    if (!found) {
         return false;
     }
     JADE_ASSERT(iter->hdkey.priv_key[0] == BIP32_FLAG_KEY_PRIVATE);
@@ -475,6 +488,13 @@ static bool sp_check_psbt(const struct wally_psbt* psbt, size_t* sp_status, cons
         const struct wally_psbt_input* const input = &psbt->inputs[i];
         if (input->sighash && input->sighash != WALLY_SIGHASH_ALL) {
             *errmsg = "Silent payments require SIGHASH_ALL";
+            return false;
+        }
+        // Without the prevout wally cannot classify the input, and reports that
+        // no differently from bad shares. Say what is actually missing.
+        const struct wally_tx_output* utxo = NULL;
+        if (wally_psbt_get_input_best_utxo(psbt, i, &utxo) != WALLY_OK || !utxo) {
+            *errmsg = "Silent payment input utxo missing";
             return false;
         }
     }
