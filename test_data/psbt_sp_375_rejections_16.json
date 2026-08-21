@@ -1,0 +1,9 @@
+{
+  "id": "scan_key_coverage_gap",
+  "description": "Multiple outputs require ECDH coverage for every scan key",
+  "input": {
+    "network": "localtest",
+    "psbt": "cHNidP8BAgQCAAAAAQQBAQEFAQIBBgEAAfsEAgAAAAABAR9ADQMAAAAAABYAFAwVpKPpgQSvv3f9e5JWFk1B08/kIgYDeWLUWzjovPgvqO+oQyoB8gyaU+JMfT8R3xl8uOcJJtoY3q2+71QAAIABAACAAAAAgAAAAAAAAAAAAQ4gqoDiBEOATzxD8kU12nO7d8XudhBBTlUsNzbQmCc8N00BDwQAAAAAARAE/v///wABAwiQXwEAAAAAAAEJQgJH6t+N0LP3/4ELu9Y7/MI7QeCMqQVjaQOZJfSCFvKkswPwJte/fjRk3Ungr/BV6hoKzy+z6WKmSFILzRuBTlI5BwABAwiQXwEAAAAAAAEJQgKjg8txb3PTaZGYTv7WuqKnV0Pseu4adKEz75BRfJGpiAOhXz8ZNYlfQcUuZYPUmTVzIIlx4WDeb5tGxI50zdb2pAA="
+  },
+  "validation_result": "invalid"
+}
