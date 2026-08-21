@@ -10,8 +10,6 @@
 #include <wally_map.h>
 #include <wally_psbt.h>
 
-// Ensure a taproot input/output is single-key and keypath-only
-// (until taproots with scripts are supported)
 // Whether the keypath at 'index' belongs to a tapscript leaf, ie. is a script
 // path key rather than the key the input is spent with
 static bool key_iter_names_leaf(const key_iter* iter, const struct wally_map* keypaths, const size_t index)
@@ -27,6 +25,8 @@ static bool key_iter_names_leaf(const key_iter* iter, const struct wally_map* ke
     return leaf_hashes->items[found - 1].value_len != 0;
 }
 
+// Ensure a taproot input/output is single-key and keypath-only
+// (until taproots with scripts are supported)
 static bool key_iter_is_supported_taproot(const key_iter* iter, const struct wally_map* keypaths)
 {
     // A taproot input may name script path keys alongside the key it is spent
