@@ -1,0 +1,9 @@
+{
+  "id": "input_utxo_missing",
+  "description": "Silent payment input UTXO is required",
+  "input": {
+    "network": "localtest",
+    "psbt": "cHNidP8BAgQCAAAAAQQBAQEFAQEBBgEAAfsEAgAAAAAiAgLqeZVtahhAkcTa4XeLDOvyj6y4fBGLflbLL9lPxELBQEgwRQIhAIfP25Dsveos/ugtgy2QJjJzd3CNr4e+wwHEI1EZGWz0AiA6iYXfZqyy4xgIWkhrTzHTGnFwMJbKwTvxmDSuJ8HSDgEBAwQBAAAAIgYC6nmVbWoYQJHE2uF3iwzr8o+suHwRi35Wyy/ZT8RCwUAYWdHzsFQAAIABAACAAAAAgAAAAAAAAAAAAQ4gDveveoma4N+gZ1tliMeGGn4IhAMFAKkoGhTCu0wRMkQBDwQAAAAAARAE/v///yIdAnpIf8Gft2mHe4dC1uoYEY88TnKx6oxt5gKnrUpB2+BoIQLNMv9zSTpCqIi1wq5lWMxiqAyFN+T9CeHCGgadBrBEMSIeAnpIf8Gft2mHe4dC1uoYEY88TnKx6oxt5gKnrUpB2+BoQB0ML5idr9TJ2nppXpwapUoDy5wFey5OOhqQNQqTzk8iJTUEzBV/mWcUjBnVQA14TqZnURNoCO6iz4b8vfYx4QUAAQMIGHMBAAAAAAABBCJRIHCaFQJbBcNEbbPU/QiXG4ow6egIgSoAZzRWdFkXXzzcAQlCAnpIf8Gft2mHe4dC1uoYEY88TnKx6oxt5gKnrUpB2+BoA2HhseneXkLLIAf3ylS54NV+0Tk4+tVtPxnldROo/OA5AA=="
+  },
+  "validation_result": "invalid"
+}
