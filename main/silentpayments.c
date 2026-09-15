@@ -76,6 +76,70 @@ static bool sp_musig_descriptor_matches(const network_t network_id, const uint32
     return matched;
 }
 
+// Get the [branch, index] a MuSig2 key is derived at. An aggregate-then-derive key
+// has one keypath under the synthetic xpub of 'aggregate'. A derive-then-aggregate
+// key has none, so the path is the tail of this wallet's own participant keypath,
+// map item 'participant_item'. When given, 'internal_key' must be what that
+// derivation produces: the synthetic child, or else the bare aggregate.
+static bool sp_musig_get_path(const struct wally_map* keypaths, const uint8_t* aggregate,
+    const size_t participant_item, const uint8_t* internal_key, uint32_t* path, bool* is_synthetic)
+{
+    struct ext_key* synthetic = NULL;
+    struct ext_key derived;
+    uint8_t synthetic_fingerprint[BIP32_KEY_FINGERPRINT_LEN];
+    uint32_t item_path[MAX_PATH_LEN];
+    size_t found = 0, path_len = 0;
+    bool success = false;
+
+    if (wally_musig_pubkey_to_xpub(aggregate, EC_PUBLIC_KEY_LEN, BIP32_VER_MAIN_PUBLIC, &synthetic) != WALLY_OK
+        || bip32_key_get_fingerprint(synthetic, synthetic_fingerprint, sizeof(synthetic_fingerprint)) != WALLY_OK) {
+        goto cleanup;
+    }
+
+    for (size_t i = 0; i < keypaths->num_items; ++i) {
+        uint8_t fingerprint[BIP32_KEY_FINGERPRINT_LEN];
+        if (wally_map_keypath_get_item_fingerprint(keypaths, i, fingerprint, sizeof(fingerprint)) == WALLY_OK
+            && !memcmp(fingerprint, synthetic_fingerprint, sizeof(fingerprint))
+            && (!internal_key
+                || (keypaths->items[i].key_len == EC_XONLY_PUBLIC_KEY_LEN
+                    && !memcmp(keypaths->items[i].key, internal_key, EC_XONLY_PUBLIC_KEY_LEN)))
+            && wally_map_keypath_get_item_path(keypaths, i, path, SP_MUSIG_PATH_LEN, &path_len) == WALLY_OK
+            && path_len == SP_MUSIG_PATH_LEN) {
+            ++found;
+        }
+    }
+
+    *is_synthetic = found != 0;
+    if (!found) {
+        if (wally_map_keypath_get_item_path(keypaths, participant_item, item_path, MAX_PATH_LEN, &path_len)
+                != WALLY_OK
+            || path_len < SP_MUSIG_PATH_LEN) {
+            goto cleanup;
+        }
+        memcpy(path, item_path + path_len - SP_MUSIG_PATH_LEN, SP_MUSIG_PATH_LEN * sizeof(*path));
+    }
+    if (found > 1 || path[0] >= BIP32_INITIAL_HARDENED_CHILD || path[1] >= BIP32_INITIAL_HARDENED_CHILD) {
+        goto cleanup;
+    }
+
+    if (!internal_key) {
+        success = true;
+    } else if (*is_synthetic) {
+        success = bip32_key_from_parent_path(synthetic, path, SP_MUSIG_PATH_LEN, BIP32_FLAG_KEY_PUBLIC, &derived)
+                == WALLY_OK
+            && !memcmp(derived.pub_key + 1, internal_key, EC_XONLY_PUBLIC_KEY_LEN);
+    } else {
+        success = !memcmp(aggregate + 1, internal_key, EC_XONLY_PUBLIC_KEY_LEN);
+    }
+
+cleanup:
+    if (synthetic) {
+        JADE_WALLY_VERIFY(bip32_key_free(synthetic));
+    }
+    JADE_WALLY_VERIFY(wally_bzero(&derived, sizeof(derived)));
+    return success;
+}
+
 static bool sp_musig_change_output_matches(const network_t network_id, const struct wally_psbt_output* output)
 {
     if (output->musig2_pubkeys.num_items != 1 || !output->script_len) {
@@ -89,68 +153,43 @@ static bool sp_musig_change_output_matches(const network_t network_id, const str
     }
 
     struct wally_musig_keyagg_cache* cache = NULL;
-    struct ext_key* synthetic = NULL;
-    struct ext_key derived;
+    struct ext_key participant_key;
     uint8_t aggregate[EC_PUBLIC_KEY_LEN];
-    uint8_t fingerprint[BIP32_KEY_FINGERPRINT_LEN];
     uint32_t path[SP_MUSIG_PATH_LEN];
     const struct wally_map_item* internal_key
         = wally_map_get_integer(&output->psbt_fields, PSBT_OUT_TAP_INTERNAL_KEY);
     size_t found = 0;
+    bool is_synthetic = false;
     bool matched = false;
 
     if (!internal_key || internal_key->value_len != EC_XONLY_PUBLIC_KEY_LEN
         || wally_musig_pubkey_agg(participants->value, participants->value_len, NULL, 0, &cache) != WALLY_OK
         || wally_musig_pubkey_get(cache, aggregate, sizeof(aggregate)) != WALLY_OK
         || memcmp(aggregate, participants->key, sizeof(aggregate))
-        || wally_musig_pubkey_to_xpub(aggregate, sizeof(aggregate), BIP32_VER_MAIN_PUBLIC, &synthetic) != WALLY_OK
-        || bip32_key_get_fingerprint(synthetic, fingerprint, sizeof(fingerprint)) != WALLY_OK) {
-        goto cleanup;
-    }
-
-    for (size_t i = 0; i < output->taproot_leaf_paths.num_items; ++i) {
-        uint8_t item_fingerprint[BIP32_KEY_FINGERPRINT_LEN];
-        size_t path_len = 0;
-        const struct wally_map_item* const item = &output->taproot_leaf_paths.items[i];
-        if (item->key_len == EC_XONLY_PUBLIC_KEY_LEN
-            && !memcmp(item->key, internal_key->value, EC_XONLY_PUBLIC_KEY_LEN)
-            && wally_map_keypath_get_item_fingerprint(
-                   &output->taproot_leaf_paths, i, item_fingerprint, sizeof(item_fingerprint))
-                == WALLY_OK
-            && !memcmp(item_fingerprint, fingerprint, sizeof(fingerprint))
-            && wally_map_keypath_get_item_path(
-                   &output->taproot_leaf_paths, i, path, SP_MUSIG_PATH_LEN, &path_len)
-                == WALLY_OK
-            && path_len == SP_MUSIG_PATH_LEN && path[0] < BIP32_INITIAL_HARDENED_CHILD
-            && path[1] < BIP32_INITIAL_HARDENED_CHILD) {
-            ++found;
-        }
-    }
-    if (found != 1
-        || bip32_key_from_parent_path(synthetic, path, SP_MUSIG_PATH_LEN, BIP32_FLAG_KEY_PUBLIC, &derived)
+        || wally_map_keypath_get_bip32_public_key_from(
+               &output->taproot_leaf_paths, 0, &keychain_get()->xpriv, &participant_key, &found)
             != WALLY_OK
-        || memcmp(derived.pub_key + 1, internal_key->value, EC_XONLY_PUBLIC_KEY_LEN)) {
+        || !found
+        || !sp_musig_get_path(
+            &output->taproot_leaf_paths, aggregate, found - 1, internal_key->value, path, &is_synthetic)) {
         goto cleanup;
     }
 
     /* The supplied path is a verified hint: descriptor derivation must still
      * reproduce the final script. For registered multipath wallets, item 1 is
      * the change role; path[0] is the concrete branch value supplied by the
-     * coordinator and committed by the synthetic derivation above. */
+     * coordinator and committed by the derivation checked above. */
     matched = path[0] == 1
         && sp_musig_descriptor_matches(network_id, path[0], path[1], output->script, output->script_len);
 
 cleanup:
     JADE_WALLY_VERIFY(wally_musig_keyagg_cache_free(cache));
-    if (synthetic) {
-        JADE_WALLY_VERIFY(bip32_key_free(synthetic));
-    }
-    JADE_WALLY_VERIFY(wally_bzero(&derived, sizeof(derived)));
+    JADE_WALLY_VERIFY(wally_bzero(&participant_key, sizeof(participant_key)));
     return matched;
 }
 
 // Classify and bind one form-(b) MuSig input to a registered descriptor. The
-// PSBT supplies the participant list and synthetic path, but neither is trusted
+// PSBT supplies the participant list and derivation path, but neither is trusted
 // until the registered descriptor reproduces the spent script.
 static bool sp_get_musig_input(const network_t network_id, const struct wally_psbt* psbt, const size_t index,
     const bool verify_descriptor, sp_musig_input_t* output, const char** errmsg)
@@ -158,10 +197,9 @@ static bool sp_get_musig_input(const network_t network_id, const struct wally_ps
     const struct wally_psbt_input* input = &psbt->inputs[index];
     const struct wally_tx_output* utxo = NULL;
     struct wally_musig_keyagg_cache* cache = NULL;
-    struct ext_key* synthetic = NULL;
     struct ext_key participant_key;
-    uint8_t synthetic_fingerprint[BIP32_KEY_FINGERPRINT_LEN];
     size_t found = 0;
+    bool is_synthetic = false;
     bool success = false;
 
     if (input->musig2_pubkeys.num_items != 1 || !input->musig2_pubkeys.items[0].key
@@ -176,45 +214,15 @@ static bool sp_get_musig_input(const network_t network_id, const struct wally_ps
     output->wally.index = index;
     output->wally.pub_keys = item->value;
     output->wally.pub_keys_len = item->value_len;
-    output->wally.path = output->path;
-    output->wally.path_len = SP_MUSIG_PATH_LEN;
 
     uint8_t aggregate[EC_PUBLIC_KEY_LEN];
     if (wally_musig_pubkey_agg(item->value, item->value_len, NULL, 0, &cache) != WALLY_OK
         || wally_musig_pubkey_get(cache, aggregate, sizeof(aggregate)) != WALLY_OK
-        || memcmp(aggregate, output->agg_pubkey, sizeof(aggregate))
-        || wally_musig_pubkey_to_xpub(
-               aggregate, sizeof(aggregate), BIP32_VER_MAIN_PUBLIC, &synthetic)
-            != WALLY_OK
-        || bip32_key_get_fingerprint(synthetic, synthetic_fingerprint, sizeof(synthetic_fingerprint)) != WALLY_OK) {
+        || memcmp(aggregate, output->agg_pubkey, sizeof(aggregate))) {
         *errmsg = "MuSig2 aggregate does not match its participants";
         goto cleanup;
     }
 
-    for (size_t i = 0; i < input->taproot_leaf_paths.num_items; ++i) {
-        uint8_t fingerprint[BIP32_KEY_FINGERPRINT_LEN];
-        size_t path_len = 0;
-        if (wally_map_keypath_get_item_fingerprint(
-                &input->taproot_leaf_paths, i, fingerprint, sizeof(fingerprint))
-                == WALLY_OK
-            && !memcmp(fingerprint, synthetic_fingerprint, sizeof(fingerprint))
-            && wally_map_keypath_get_item_path(
-                   &input->taproot_leaf_paths, i, output->path, SP_MUSIG_PATH_LEN, &path_len)
-                == WALLY_OK
-            && path_len == SP_MUSIG_PATH_LEN && output->path[0] < BIP32_INITIAL_HARDENED_CHILD
-            && output->path[1] < BIP32_INITIAL_HARDENED_CHILD) {
-            ++found;
-        }
-    }
-    if (found != 1 || wally_psbt_get_input_best_utxo(psbt, index, &utxo) != WALLY_OK || !utxo
-        || (verify_descriptor
-            && !sp_musig_descriptor_matches(
-                network_id, output->path[0], output->path[1], utxo->script, utxo->script_len))) {
-        *errmsg = "MuSig2 input does not match a registered descriptor";
-        goto cleanup;
-    }
-
-    found = 0;
     if (wally_map_keypath_get_bip32_key_from(
             &input->taproot_leaf_paths, 0, &keychain_get()->xpriv, &participant_key, &found)
             != WALLY_OK
@@ -222,6 +230,19 @@ static bool sp_get_musig_input(const network_t network_id, const struct wally_ps
         *errmsg = "This wallet is not a MuSig2 participant";
         goto cleanup;
     }
+
+    if (!sp_musig_get_path(&input->taproot_leaf_paths, aggregate, found - 1, NULL, output->path, &is_synthetic)
+        || wally_psbt_get_input_best_utxo(psbt, index, &utxo) != WALLY_OK || !utxo
+        || (verify_descriptor
+            && !sp_musig_descriptor_matches(
+                network_id, output->path[0], output->path[1], utxo->script, utxo->script_len))) {
+        *errmsg = "MuSig2 input does not match a registered descriptor";
+        goto cleanup;
+    }
+    // A derive-then-aggregate key has no synthetic derivation for wally to apply
+    output->wally.path = is_synthetic ? output->path : NULL;
+    output->wally.path_len = is_synthetic ? SP_MUSIG_PATH_LEN : 0;
+
     for (size_t i = 0; i < item->value_len; i += EC_PUBLIC_KEY_LEN) {
         if (!memcmp(participant_key.pub_key, item->value + i, EC_PUBLIC_KEY_LEN)) {
             memcpy(output->participant, participant_key.pub_key, sizeof(output->participant));
@@ -236,9 +257,6 @@ static bool sp_get_musig_input(const network_t network_id, const struct wally_ps
 
 cleanup:
     JADE_WALLY_VERIFY(wally_musig_keyagg_cache_free(cache));
-    if (synthetic) {
-        JADE_WALLY_VERIFY(bip32_key_free(synthetic));
-    }
     JADE_WALLY_VERIFY(wally_bzero(&participant_key, sizeof(participant_key)));
     return success;
 }
