@@ -357,13 +357,25 @@ bool descriptor_get_signers(const char* name, const descriptor_data_t* descripto
             }
             if (key_features & WALLY_MS_IS_MUSIG) {
                 size_t num_participants = 0;
-                if (!(key_features & WALLY_MS_IS_RANGED)) {
-                    *errmsg = "MuSig aggregate must have a wildcard child path";
-                    goto cleanup;
-                }
                 if (wally_descriptor_get_musig_num_participants(d, i, &num_participants) != WALLY_OK
                     || !num_participants || num_participants > MAX_ALLOWED_SIGNERS - num_signers) {
                     *errmsg = "Invalid number of MuSig participants";
+                    goto cleanup;
+                }
+                // Either the aggregate is ranged (aggregate-then-derive) or every
+                // participant is (derive-then-aggregate)
+                bool is_ranged = key_features & WALLY_MS_IS_RANGED;
+                for (size_t j = 0; !is_ranged && j < num_participants; ++j) {
+                    uint32_t participant_features = 0;
+                    if (wally_descriptor_get_musig_participant_key_features(d, i, j, &participant_features)
+                            != WALLY_OK
+                        || !(participant_features & WALLY_MS_IS_RANGED)) {
+                        break;
+                    }
+                    is_ranged = j == num_participants - 1;
+                }
+                if (!is_ranged) {
+                    *errmsg = "MuSig key must have a wildcard child path";
                     goto cleanup;
                 }
                 num_signers += num_participants;
@@ -404,20 +416,23 @@ bool descriptor_get_signers(const char* name, const descriptor_data_t* descripto
                 *errmsg = "Failed to get MuSig participants";
                 goto cleanup;
             }
-            char* child_path = NULL;
-            if (wally_descriptor_get_key_child_path_str(d, i, &child_path) != WALLY_OK || !child_path) {
-                *errmsg = "Failed to get MuSig aggregate child path string";
-                goto cleanup;
-            }
-            const size_t child_path_len = strlen(child_path);
-            if (child_path_len >= sizeof(signers[0].path_str)) {
-                *errmsg = "MuSig aggregate child path string too long";
+            // Derive-then-aggregate keys carry their child path on each participant
+            const bool derive_first = !(key_features & WALLY_MS_IS_RANGED);
+            char aggregate_path[sizeof(signers[0].path_str)] = { 0 };
+            if (!derive_first) {
+                char* child_path = NULL;
+                if (wally_descriptor_get_key_child_path_str(d, i, &child_path) != WALLY_OK || !child_path) {
+                    *errmsg = "Failed to get MuSig aggregate child path string";
+                    goto cleanup;
+                }
+                if (strlen(child_path) >= sizeof(aggregate_path)) {
+                    *errmsg = "MuSig aggregate child path string too long";
+                    JADE_WALLY_VERIFY(wally_free_string(child_path));
+                    goto cleanup;
+                }
+                strcpy(aggregate_path, child_path);
                 JADE_WALLY_VERIFY(wally_free_string(child_path));
-                goto cleanup;
             }
-            char aggregate_path[sizeof(signers[0].path_str)];
-            strcpy(aggregate_path, child_path);
-            JADE_WALLY_VERIFY(wally_free_string(child_path));
             for (size_t participant_index = 0; participant_index < num_participants; ++participant_index) {
                 signer_t* const signer = signers + signer_index++;
                 uint32_t participant_features = 0;
@@ -471,19 +486,27 @@ bool descriptor_get_signers(const char* name, const descriptor_data_t* descripto
                     }
                     xpub = origin_end + 1;
                 }
-                const size_t xpub_len = strlen(xpub);
-                if (xpub_len >= sizeof(signer->xpub)) {
+                // The key string is 'xpub/<child path>' when the participant is ranged
+                const char* const child_path = derive_first ? strchr(xpub, '/') : NULL;
+                const char* const path = child_path ? child_path + 1 : aggregate_path;
+                const size_t xpub_len = child_path ? (size_t)(child_path - xpub) : strlen(xpub);
+                if (derive_first && !child_path) {
+                    *errmsg = "MuSig participant has no child path";
+                    JADE_WALLY_VERIFY(wally_free_string(str));
+                    goto cleanup;
+                }
+                if (xpub_len >= sizeof(signer->xpub) || strlen(path) >= sizeof(signer->path_str)) {
                     *errmsg = "MuSig participant xpub string too long";
                     JADE_WALLY_VERIFY(wally_free_string(str));
                     goto cleanup;
                 }
-                strcpy(signer->xpub, xpub);
+                memcpy(signer->xpub, xpub, xpub_len);
+                signer->xpub[xpub_len] = '\0';
                 signer->xpub_len = xpub_len;
-                JADE_WALLY_VERIFY(wally_free_string(str));
-
-                strcpy(signer->path_str, aggregate_path);
-                signer->path_len = child_path_len;
+                strcpy(signer->path_str, path);
+                signer->path_len = strlen(path);
                 signer->path_is_string = true;
+                JADE_WALLY_VERIFY(wally_free_string(str));
             }
             continue;
         }
