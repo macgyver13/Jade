@@ -561,6 +561,7 @@ def run_collaborative_roundtrip(jade, network='localtest', account=0, verbose=Tr
 MUSIG_ORIGIN = [48 | HARDENED, 1 | HARDENED, 0 | HARDENED, 3 | HARDENED]
 MUSIG_BRANCH, MUSIG_INDEX = 0, 0
 MUSIG_DESCRIPTOR_NAME = 'spmusig'
+MUSIG_DERIVE_FIRST_DESCRIPTOR_NAME = 'spmusigd'
 COSIGNER_SEED = '22' * 64
 BIP32_VER_MAIN_PUBLIC = 0x0488B21E
 BIP32_VER_MAIN_PRIVATE = 0x0488ADE4
@@ -614,13 +615,18 @@ def key_expression(sp, xpub, fingerprint):
     return f'[{fingerprint.hex()}/{origin}]{xpub}'
 
 
-def musig_descriptor(sp, network, expressions):
-    """tr(musig(...)/<0;1>/*), the aggregate-then-derive form Jade registers.
+def musig_descriptor(sp, network, expressions, derive_first=False):
+    """tr(musig(...)/<0;1>/*), the aggregate-then-derive form, or with
+    derive_first tr(musig(.../<0;1>/*,...)), where each participant is derived
+    before aggregating.
 
     Parsed against the network Jade will use, so a key expression from the
     wrong network fails here rather than as a parse error on the device.
     """
-    descriptor = f'tr(musig({",".join(sorted(expressions))})/<0;1>/*)'
+    if derive_first:
+        descriptor = f'tr(musig({",".join(f"{e}/<0;1>/*" for e in sorted(expressions))}))'
+    else:
+        descriptor = f'tr(musig({",".join(sorted(expressions))})/<0;1>/*)'
     parsed = sp.c_void_p()
     assert sp.wally_descriptor_parse(descriptor.encode(), None,
                                      WALLY_NETWORKS[network], 0,
@@ -633,12 +639,13 @@ def musig_descriptor(sp, network, expressions):
     return f'{descriptor}#{checksum}'
 
 
-def musig_setup(jade, sp, network):
+def musig_setup(jade, sp, network, derive_first=False):
     """Register a two-of-two MuSig2 descriptor with Jade and derive its script.
 
     Returns everything both signers need: the sorted participant pubkeys, the
-    aggregate, the synthetic derivation Jade checks the input against, and the
-    scriptPubKey the descriptor produces at MUSIG_BRANCH/MUSIG_INDEX.
+    aggregate, the synthetic derivation Jade checks the input against (absent
+    when derive_first), and the scriptPubKey the descriptor produces at
+    MUSIG_BRANCH/MUSIG_INDEX.
     """
     jade_fingerprint = get_fingerprint(jade, sp, network)
     jade_xpub = jade.get_xpub(network, MUSIG_ORIGIN)
@@ -655,8 +662,16 @@ def musig_setup(jade, sp, network):
 
     descriptor = musig_descriptor(sp, network, [
         key_expression(sp, jade_xpub, jade_fingerprint),
-        key_expression(sp, cosigner_xpub, cosigner_fingerprint)])
-    assert jade.register_descriptor(network, MUSIG_DESCRIPTOR_NAME, descriptor, {})
+        key_expression(sp, cosigner_xpub, cosigner_fingerprint)], derive_first)
+    name = MUSIG_DERIVE_FIRST_DESCRIPTOR_NAME if derive_first else MUSIG_DESCRIPTOR_NAME
+    assert jade.register_descriptor(network, name, descriptor, {})
+
+    if derive_first:
+        # Each participant is derived first, so the keys aggregated are the children
+        jade_pubkey = bytes(derive_key(sp, sp.byref(jade_account), [MUSIG_BRANCH, MUSIG_INDEX],
+                                       BIP32_FLAG_KEY_PUBLIC).contents.pub_key)
+        cosigner = derive_key(sp, cosigner, [MUSIG_BRANCH, MUSIG_INDEX], BIP32_FLAG_KEY_PRIVATE)
+        cosigner_pubkey = bytes(cosigner.contents.pub_key)
 
     participants = b''.join(sorted([jade_pubkey, cosigner_pubkey]))
     cache = sp.c_void_p()
@@ -667,14 +682,20 @@ def musig_setup(jade, sp, network):
     aggregate = bytes(buf)
     sp.wally_musig_keyagg_cache_free(cache)
 
-    # The aggregate is derived, not the participants, so the taproot internal
-    # key comes from the synthetic xpub the aggregate makes
-    synthetic = sp.POINTER(sp.ext_key)()
-    _, public_version = bip32_versions(network)
-    assert sp.wally_musig_pubkey_to_xpub(aggregate, len(aggregate), public_version,
-                                         sp.byref(synthetic)) == sp.WALLY_OK
-    internal = derive_key(sp, synthetic, [MUSIG_BRANCH, MUSIG_INDEX], BIP32_FLAG_KEY_PUBLIC)
-    internal_key = bytes(internal.contents.pub_key)
+    synthetic_fingerprint = None
+    if derive_first:
+        # The participants are already derived, so the aggregate is the internal key
+        internal_key = aggregate
+    else:
+        # The aggregate is derived, not the participants, so the taproot internal
+        # key comes from the synthetic xpub the aggregate makes
+        synthetic = sp.POINTER(sp.ext_key)()
+        _, public_version = bip32_versions(network)
+        assert sp.wally_musig_pubkey_to_xpub(aggregate, len(aggregate), public_version,
+                                             sp.byref(synthetic)) == sp.WALLY_OK
+        internal = derive_key(sp, synthetic, [MUSIG_BRANCH, MUSIG_INDEX], BIP32_FLAG_KEY_PUBLIC)
+        internal_key = bytes(internal.contents.pub_key)
+        synthetic_fingerprint = key_fingerprint(sp, synthetic)
 
     tweaked, tweaked_len = sp.make_cbuffer('00' * 33)
     assert sp.wally_ec_public_key_bip341_tweak(internal_key, len(internal_key), None, 0,
@@ -685,7 +706,8 @@ def musig_setup(jade, sp, network):
             'aggregate': aggregate,
             'internal_key': internal_key[1:],
             'script': b'\x51\x20' + bytes(tweaked)[1:],
-            'synthetic_fingerprint': key_fingerprint(sp, synthetic),
+            'synthetic_fingerprint': synthetic_fingerprint,
+            'derive_first': derive_first,
             'jade': {'pubkey': jade_pubkey, 'fingerprint': jade_fingerprint},
             'cosigner': {'seckey': bytes(cosigner.contents.priv_key)[1:],
                          'pubkey': cosigner_pubkey}}
@@ -719,10 +741,14 @@ def build_musig_psbt(sp, setup, recipient_info, amount=MUSIG_SP_AMOUNT):
         psbt.contents.inputs, setup['aggregate'], len(setup['aggregate']),
         setup['participants'], len(setup['participants'])) == sp.WALLY_OK
 
-    add_taproot_keypath(sp, psbt, setup['internal_key'], setup['synthetic_fingerprint'],
-                        [MUSIG_BRANCH, MUSIG_INDEX])
-    add_taproot_keypath(sp, psbt, setup['jade']['pubkey'][1:], setup['jade']['fingerprint'],
-                        MUSIG_ORIGIN)
+    if setup['derive_first']:
+        add_taproot_keypath(sp, psbt, setup['jade']['pubkey'][1:], setup['jade']['fingerprint'],
+                            MUSIG_ORIGIN + [MUSIG_BRANCH, MUSIG_INDEX])
+    else:
+        add_taproot_keypath(sp, psbt, setup['internal_key'], setup['synthetic_fingerprint'],
+                            [MUSIG_BRANCH, MUSIG_INDEX])
+        add_taproot_keypath(sp, psbt, setup['jade']['pubkey'][1:], setup['jade']['fingerprint'],
+                            MUSIG_ORIGIN)
 
     tx_output = sp.pointer(sp.wally_tx_output())
     assert sp.wally_tx_output_init_alloc(amount, None, 0, tx_output) == sp.WALLY_OK
@@ -832,8 +858,10 @@ def musig_input(sp, setup):
     value.pub_keys = sp.cast(pubkeys, sp.c_void_p)
     value.pub_keys_len = len(setup['participants'])
     path = (sp.c_uint32 * 2)(MUSIG_BRANCH, MUSIG_INDEX)
-    value.path = sp.cast(path, sp.c_void_p)
-    value.path_len = 2
+    if not setup['derive_first']:
+        # A derive-then-aggregate key has no synthetic derivation
+        value.path = sp.cast(path, sp.c_void_p)
+        value.path_len = 2
     value._buffers = (pubkeys, path)  # keep the ctypes buffers alive
     return value
 
@@ -869,7 +897,7 @@ def cosigner_round2(sp, setup, data, secnonce, digest):
 
 
 
-def run_musig_roundtrip(jade, network='localtest', verbose=True):
+def run_musig_roundtrip(jade, network='localtest', verbose=True, derive_first=False):
     """Jade signs a MuSig2 silent payment input across both rounds.
 
     Jade goes first, so round 1 must add its share, proof and pubnonce without
@@ -886,7 +914,7 @@ def run_musig_roundtrip(jade, network='localtest', verbose=True):
         if verbose:
             print(message)
 
-    setup = musig_setup(jade, sp, network)
+    setup = musig_setup(jade, sp, network, derive_first)
     log(f'Descriptor: {setup["descriptor"]}')
     recipient = get_recipient(jade, sp, network, 0, get_fingerprint(jade, sp, network))
     psbt_bytes = build_musig_psbt(sp, setup, recipient['info'])
@@ -928,9 +956,12 @@ def verify_musig_signature(sp, setup, data):
     """Aggregate the partial signatures and check the input finalizes."""
     psbt = parse_psbt(sp, data)
     assert psbt.contents.inputs[0].musig2_partial_sigs.num_items == 2
+    # A derive-then-aggregate key has no synthetic path to apply
     path = (sp.c_uint32 * 2)(MUSIG_BRANCH, MUSIG_INDEX)
+    path_len = 0 if setup['derive_first'] else 2
     assert sp.wally_psbt_musig2_agg_then_derive_finalize_input(
-        psbt, 0, setup['aggregate'], len(setup['aggregate']), path, 2, 0) == sp.WALLY_OK
+        psbt, 0, setup['aggregate'], len(setup['aggregate']), path if path_len else None,
+        path_len, 0) == sp.WALLY_OK
     ret, length = sp.wally_psbt_get_input_taproot_signature_len(psbt, 0)
     assert ret == sp.WALLY_OK and length, 'no aggregate signature produced'
     sp.wally_psbt_free(psbt)
@@ -1011,7 +1042,7 @@ def mutate_output_amount(sp, data, delta=1):
     return serialize_psbt(sp, psbt, free=True)
 
 
-def run_musig_flow(jade, network='localtest', verbose=True):
+def run_musig_flow(jade, network='localtest', verbose=True, derive_first=False):
     """The whole MuSig2 silent payment story: both rounds, then the refusals."""
     sp = load_wally()
     assert sp, f'no libwally build found under {WALLY_DIR}'
@@ -1020,7 +1051,7 @@ def run_musig_flow(jade, network='localtest', verbose=True):
         if verbose:
             print(message)
 
-    setup, recipient = run_musig_roundtrip(jade, network, verbose)
+    setup, recipient = run_musig_roundtrip(jade, network, verbose, derive_first)
     run_musig_negative_cases(jade, sp, setup, recipient, network, log)
     run_musig_concurrent_sessions(jade, sp, setup, recipient, network, log)
 
@@ -1041,6 +1072,8 @@ def main():
     parser.add_argument('--musig', action='store_true',
                         help='Run the MuSig2 two round flow instead; needs '
                              'Settings > Wallet > Silent Payments > Collaborative On')
+    parser.add_argument('--derive-first', action='store_true',
+                        help='With --musig, use a derive-then-aggregate descriptor')
     args = parser.parse_args()
 
     if not load_wally():
@@ -1050,7 +1083,7 @@ def main():
     with JadeAPI.create_serial(device=args.serialport, timeout=args.timeout) as jade:
         jade.set_mnemonic(args.mnemonic, temporary_wallet=True)
         if args.musig:
-            run_musig_flow(jade, args.network)
+            run_musig_flow(jade, args.network, derive_first=args.derive_first)
         elif args.collaborative:
             run_collaborative_roundtrip(jade, args.network, args.account)
         else:

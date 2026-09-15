@@ -2928,6 +2928,7 @@ def test_silent_payment_musig_roundtrip(jadeapi, network='localtest'):
         return
     try:
         test_sp_roundtrip.run_musig_flow(jadeapi, network, verbose=False)
+        test_sp_roundtrip.run_musig_flow(jadeapi, network, verbose=False, derive_first=True)
     except JadeError as err:
         if not err.message.startswith('Collaborative silent payments are disabled'):
             raise
