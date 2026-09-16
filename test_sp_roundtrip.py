@@ -577,6 +577,8 @@ MUSIG_CHANGED_ERROR = 'Transaction changed between rounds'
 MUSIG_UNRESOLVED_ERROR = 'Silent payment outputs do not match the shares'
 SP_SPEND_PATH_ERROR = 'Unexpected silent payment spend key path'
 WALLY_SP_INCOMPLETE, WALLY_SP_COMPLETE = 1, 2
+# Participants of a MuSig2 input Jade holds no key for
+FOREIGN_MUSIG_SECRETS = [bytes([0x41] * 32), bytes([0x42] * 32)]
 
 
 def derive_key(sp, key, path, flags):
@@ -1035,6 +1037,138 @@ def run_musig_concurrent_sessions(jade, sp, setup, recipient, network='localtest
     log('Jade signed two interleaved MuSig2 sessions from the same wallet')
 
 
+def foreign_musig(sp):
+    """A derive-then-aggregate MuSig2 key of two parties, neither of them Jade."""
+    participants = b''.join(sorted(sp.pubkey_from_privkey(sk) for sk in FOREIGN_MUSIG_SECRETS))
+    cache = sp.c_void_p()
+    assert sp.wally_musig_pubkey_agg(participants, len(participants), None, 0,
+                                     sp.byref(cache)) == sp.WALLY_OK
+    buf, buf_len = sp.make_cbuffer('00' * 33)
+    assert sp.wally_musig_pubkey_get(cache, buf, buf_len) == sp.WALLY_OK
+    sp.wally_musig_keyagg_cache_free(cache)
+    aggregate = bytes(buf)
+    tweaked, tweaked_len = sp.make_cbuffer('00' * 33)
+    assert sp.wally_ec_public_key_bip341_tweak(aggregate, len(aggregate), None, 0, 0,
+                                               tweaked, tweaked_len) == sp.WALLY_OK
+    return {'participants': participants, 'aggregate': aggregate,
+            'script': b'\x51\x20' + bytes(tweaked)[1:]}
+
+
+def build_foreign_musig_psbt(sp, musig, key, recipient_info):
+    """Input 0 is the foreign MuSig2 key, input 1 a p2wpkh key of Jade's."""
+    psbt = sp.pointer(sp.wally_psbt())
+    assert sp.wally_psbt_init_alloc(sp.WALLY_PSBT_VERSION_2, 2, 1, 0, 0, psbt) == sp.WALLY_OK
+    for index, (amount, script) in enumerate([(MUSIG_AMOUNT, musig['script']),
+                                              (INPUT_AMOUNT, key['script'])]):
+        tx_input = sp.pointer(sp.wally_tx_input())
+        assert sp.wally_tx_input_init_alloc(FUNDING_TXID, len(FUNDING_TXID), index, 0xffffffff,
+                                            None, 0, None, tx_input) == sp.WALLY_OK
+        assert sp.wally_psbt_add_tx_input_at(psbt, index, 0, tx_input) == sp.WALLY_OK
+        utxo = sp.pointer(sp.wally_tx_output())
+        assert sp.wally_tx_output_init_alloc(amount, script, len(script), utxo) == sp.WALLY_OK
+        assert sp.wally_psbt_set_input_witness_utxo(psbt, index, utxo) == sp.WALLY_OK
+        assert sp.wally_psbt_set_input_amount(psbt, index, amount) == sp.WALLY_OK
+        assert sp.wally_psbt_set_input_sighash(psbt, index, sp.WALLY_SIGHASH_ALL) == sp.WALLY_OK
+    internal_key = musig['aggregate'][1:]
+    assert sp.wally_psbt_set_input_taproot_internal_key(psbt, 0, internal_key,
+                                                        len(internal_key)) == sp.WALLY_OK
+    assert sp.wally_psbt_input_add_musig2_participant_pubkeys(
+        psbt.contents.inputs, musig['aggregate'], len(musig['aggregate']),
+        musig['participants'], len(musig['participants'])) == sp.WALLY_OK
+    add_keypath(sp, psbt, 1, key, sp.wally_psbt_add_input_keypath)
+
+    amount = MUSIG_SP_AMOUNT + INPUT_AMOUNT - 10000
+    tx_output = sp.pointer(sp.wally_tx_output())
+    assert sp.wally_tx_output_init_alloc(amount, None, 0, tx_output) == sp.WALLY_OK
+    assert sp.wally_psbt_add_tx_output_at(psbt, 0, 0, tx_output) == sp.WALLY_OK
+    assert sp.wally_psbt_set_output_amount(psbt, 0, amount) == sp.WALLY_OK
+    assert sp.wally_psbt_set_output_sp_v0_info(psbt, 0, recipient_info,
+                                               len(recipient_info)) == sp.WALLY_OK
+    return serialize_psbt(sp, psbt, free=True)
+
+
+def foreign_musig_input(sp, musig):
+    value = sp.wally_sp_musig_input()
+    value.index = 0
+    pubkeys, _ = sp.make_cbuffer(musig['participants'].hex())
+    value.pub_keys = sp.cast(pubkeys, sp.c_void_p)
+    value.pub_keys_len = len(musig['participants'])
+    value._buffers = (pubkeys,)  # keep the ctypes buffer alive
+    return value
+
+
+def foreign_round1(sp, musig, data, party):
+    psbt = parse_psbt(sp, data)
+    seckey = FOREIGN_MUSIG_SECRETS[party]
+    entropy = bytes([0x70 + party]) * 64
+    nonce_out = (sp.c_void_p * 1)()
+    digest_out, _ = sp.make_cbuffer('00' * SHA256_LEN)
+    ret, status = sp.wally_psbt_sp_musig_round1(
+        psbt, sp.byref(foreign_musig_input(sp, musig)), 1, signer_indices(sp, 0), 1,
+        seckey, len(seckey), entropy, len(entropy), 0, nonce_out, digest_out, SHA256_LEN)
+    assert ret == sp.WALLY_OK, ret
+    return serialize_psbt(sp, psbt, free=True), nonce_out[0], status
+
+
+def foreign_round2(sp, musig, data, party, secnonce, digest):
+    psbt = parse_psbt(sp, data)
+    seckey = FOREIGN_MUSIG_SECRETS[party]
+    nonce = (sp.c_void_p * 1)(secnonce)
+    assert sp.wally_psbt_sp_musig_round2(psbt, sp.byref(foreign_musig_input(sp, musig)), 1,
+                                         signer_indices(sp, 0), 1, seckey, len(seckey), nonce,
+                                         digest, len(digest), 0) == sp.WALLY_OK
+    return serialize_psbt(sp, psbt, free=True)
+
+
+def run_musig_ordinary_cosigner(jade, sp, network='localtest', log=print):
+    """Jade holds only an ordinary input beside a MuSig2 input it is not part of.
+
+    It must add its share in round 1, before or after the MuSig2 parties, and
+    sign its own input once they have resolved the outputs.
+    """
+    fingerprint = get_fingerprint(jade, sp, network)
+    (key,), _ = get_wallet_keys(jade, sp, network, 1, fingerprint)
+    recipient = get_recipient(jade, sp, network, 0, fingerprint)
+    musig = foreign_musig(sp)
+
+    for jade_first in (True, False):
+        data = build_foreign_musig_psbt(sp, musig, key, recipient['info'])
+        if jade_first:
+            data = bytes(jade.sign_psbt(network, data))
+        nonces = []
+        for party in range(len(FOREIGN_MUSIG_SECRETS)):
+            data, nonce, status = foreign_round1(sp, musig, data, party)
+            nonces.append(nonce)
+        expected = WALLY_SP_COMPLETE if jade_first else WALLY_SP_INCOMPLETE
+        assert status == expected, f'last MuSig2 party left status {status}'
+        if not jade_first:
+            data = bytes(jade.sign_psbt(network, data))
+
+        psbt = parse_psbt(sp, data)
+        assert all(sp_output_scripts(sp, psbt)), 'outputs were not resolved in round 1'
+        assert psbt.contents.tx_modifiable_flags == 0, 'resolved psbt is still modifiable'
+        assert psbt.contents.inputs[1].signatures.num_items == 0, 'Jade signed in round 1'
+        digest = session_digest(sp, psbt)
+        sp.wally_psbt_free(psbt)
+
+        for party, nonce in enumerate(nonces):
+            data = foreign_round2(sp, musig, data, party, nonce, digest)
+            sp.wally_musig_secnonce_free(nonce)
+        signed = bytes(jade.sign_psbt(network, data))
+
+        psbt = parse_psbt(sp, signed)
+        tx = sp.POINTER(sp.wally_tx)()
+        assert sp.wally_psbt_extract(psbt, WALLY_PSBT_EXTRACT_NON_FINAL,
+                                     sp.byref(tx)) == sp.WALLY_OK
+        verify_input_signature(sp, psbt, tx, 1)
+        sp.wally_tx_free(tx)
+        assert sp.wally_psbt_musig2_agg_then_derive_finalize_input(
+            psbt, 0, musig['aggregate'], len(musig['aggregate']), None, 0, 0) == sp.WALLY_OK
+        sp.wally_psbt_free(psbt)
+        order = 'before' if jade_first else 'after'
+        log(f'Jade co-signed its ordinary input {order} the MuSig2 parties')
+
+
 def mutate_output_amount(sp, data, delta=1):
     """Change what the psbt pays, leaving everything else in place."""
     psbt = parse_psbt(sp, data)
@@ -1055,6 +1189,7 @@ def run_musig_flow(jade, network='localtest', verbose=True, derive_first=False):
     setup, recipient = run_musig_roundtrip(jade, network, verbose, derive_first)
     run_musig_negative_cases(jade, sp, setup, recipient, network, log)
     run_musig_concurrent_sessions(jade, sp, setup, recipient, network, log)
+    run_musig_ordinary_cosigner(jade, sp, network, log)
 
 
 def main():
