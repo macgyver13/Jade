@@ -496,6 +496,11 @@ void show_sp_musig_expired_activity(void)
     await_message_2("Signing session expired", "Restart from round 1");
 }
 
+void show_sp_no_memory_activity(void)
+{
+    await_error("Not enough memory for this transaction. Try fewer inputs.");
+}
+
 bool show_btc_transaction_outputs_activity(
     const network_t network_id, const struct wally_tx* tx, const output_info_t* output_info)
 {
