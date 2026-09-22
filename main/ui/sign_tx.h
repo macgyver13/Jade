@@ -17,6 +17,7 @@ bool show_sp_musig_sign_activity(void);
 void show_sp_musig_mismatch_activity(void);
 void show_sp_musig_changed_activity(void);
 void show_sp_musig_expired_activity(void);
+void show_sp_no_memory_activity(void);
 
 bool show_btc_transaction_outputs_activity(
     network_t network_id, const struct wally_tx* tx, const output_info_t* output_info);
