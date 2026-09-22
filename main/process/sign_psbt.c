@@ -723,6 +723,75 @@ network_t network_from_psbt_type(struct wally_psbt* psbt)
 // Sign a psbt/pset - the passed wally psbt struct is updated with any signatures.
 // Returns 0 if no errors occurred - does not necessarily indicate that signatures were added.
 // Returns an rpc/message error code on error, and the error string should be populated.
+// Report an error from the silent payment code, showing the user why if it has
+// something to say, and return the rpc error code for it
+static int silent_payment_error(const char* errmsg)
+{
+    if (!errmsg) {
+        return CBOR_RPC_BAD_PARAMETERS;
+    }
+    if (!strcmp(errmsg, SP_NO_MEMORY_ERROR)) {
+        show_sp_no_memory_activity();
+        return CBOR_RPC_INTERNAL_ERROR;
+    }
+    if (!strcmp(errmsg, "Signing session expired")) {
+        show_sp_musig_expired_activity();
+    } else if (!strcmp(errmsg, "Transaction changed between rounds")) {
+        show_sp_musig_changed_activity();
+    } else if (!strcmp(errmsg, "Silent payment outputs do not match the shares")) {
+        show_sp_musig_mismatch_activity();
+    }
+    return CBOR_RPC_BAD_PARAMETERS;
+}
+
+// Process any silent payment outputs, adding shares and returning early where
+// this signer is not the last. On return 0 with *sp_result SP_SHARES_ONLY or
+// SP_MUSIG_CONTRIBUTE the psbt is ready to return unsigned; any other result
+// continues to the usual signing flow.
+static int process_silent_payments(const network_t network_id, struct wally_psbt* psbt, sp_summary_t* sp_summary,
+    sp_result_t* sp_result, const char** errmsg)
+{
+    if (!sp_process_psbt(network_id, psbt, sp_summary, sp_result, errmsg)) {
+        return silent_payment_error(*errmsg);
+    }
+    if (*sp_result != SP_CONTRIBUTE && *sp_result != SP_MUSIG_CONTRIBUTE) {
+        return 0;
+    }
+    // We hold only some of the eligible inputs, so we can add our shares
+    // but cannot derive the outputs - and so cannot sign, SIGHASH_ALL
+    // committing to outputs that do not exist yet. Confirm what little can
+    // be shown, add the shares, and return the psbt for the next signer.
+    const bool is_musig = *sp_result == SP_MUSIG_CONTRIBUTE;
+    if (!show_sp_contribute_activity(sp_summary, is_musig)) {
+        *errmsg = "User declined to contribute silent payment shares";
+        return CBOR_RPC_USER_CANCELLED;
+    }
+    display_processing_message_activity();
+    if (!sp_contribute_psbt(network_id, psbt, sp_result, errmsg)) {
+        return silent_payment_error(*errmsg);
+    }
+    if (is_musig) {
+        bool resolved = true;
+        for (size_t i = 0; i < psbt->num_outputs; ++i) {
+            size_t sp_info_len = 0, script_len = 0;
+            if (wally_psbt_get_output_sp_v0_info_len(psbt, i, &sp_info_len) == WALLY_OK && sp_info_len
+                && (wally_psbt_get_output_script_len(psbt, i, &script_len) != WALLY_OK || !script_len)) {
+                resolved = false;
+                break;
+            }
+        }
+        if (resolved) {
+            await_message_2("Round 1 complete", "Outputs resolved");
+        }
+        *sp_result = SP_MUSIG_CONTRIBUTE; // Nothing to sign in round 1
+    }
+    // SP_SHARES_ONLY: nothing to sign, and nothing more to show the user.
+    // SP_SIGN: our shares completed the coverage, so the outputs are resolved
+    // and this signer is also the last one: continue to the usual flow, where
+    // the user approves the amounts and fee before signing.
+    return 0;
+}
+
 int sign_psbt(jade_process_t* process, CborValue* params, const network_t network_id, struct wally_psbt* psbt,
     const char** errmsg)
 {
@@ -738,55 +807,14 @@ int sign_psbt(jade_process_t* process, CborValue* params, const network_t networ
         return CBOR_RPC_BAD_PARAMETERS;
     }
     const bool for_liquid = is_elements;
-    sp_summary_t sp_summary;
+    // The summary holds several addresses, too large for the main task's stack
+    sp_summary_t* const sp_summary = JADE_MALLOC(sizeof(sp_summary_t));
     sp_result_t sp_result = SP_NONE;
-    if (!sp_process_psbt(network_id, psbt, &sp_summary, &sp_result, errmsg)) {
-        if (*errmsg && !strcmp(*errmsg, "Signing session expired")) {
-            show_sp_musig_expired_activity();
-        } else if (*errmsg && !strcmp(*errmsg, "Transaction changed between rounds")) {
-            show_sp_musig_changed_activity();
-        } else if (*errmsg && !strcmp(*errmsg, "Silent payment outputs do not match the shares")) {
-            show_sp_musig_mismatch_activity();
-        }
-        return CBOR_RPC_BAD_PARAMETERS;
-    }
-    if (sp_result == SP_CONTRIBUTE || sp_result == SP_MUSIG_CONTRIBUTE) {
-        // We hold only some of the eligible inputs, so we can add our shares
-        // but cannot derive the outputs - and so cannot sign, SIGHASH_ALL
-        // committing to outputs that do not exist yet. Confirm what little can
-        // be shown, add the shares, and return the psbt for the next signer.
-        const bool is_musig = sp_result == SP_MUSIG_CONTRIBUTE;
-        if (!show_sp_contribute_activity(&sp_summary, is_musig)) {
-            *errmsg = "User declined to contribute silent payment shares";
-            return CBOR_RPC_USER_CANCELLED;
-        }
-        display_processing_message_activity();
-        if (!sp_contribute_psbt(network_id, psbt, &sp_result, errmsg)) {
-            return CBOR_RPC_BAD_PARAMETERS;
-        }
-        if (is_musig) {
-            bool resolved = true;
-            for (size_t i = 0; i < psbt->num_outputs; ++i) {
-                size_t sp_info_len = 0, script_len = 0;
-                if (wally_psbt_get_output_sp_v0_info_len(psbt, i, &sp_info_len) == WALLY_OK && sp_info_len
-                    && (wally_psbt_get_output_script_len(psbt, i, &script_len) != WALLY_OK || !script_len)) {
-                    resolved = false;
-                    break;
-                }
-            }
-            if (resolved) {
-                await_message_2("Round 1 complete", "Outputs resolved");
-            }
-            return 0;
-        }
-        if (sp_result == SP_SHARES_ONLY) {
-            // Nothing to sign, and nothing more to show the user: the caller
-            // returns the psbt carrying our shares and no signatures
-            return 0;
-        }
-        // Our shares completed the coverage, so the outputs are resolved and
-        // this signer is also the last one: fall through to the usual flow,
-        // where the user approves the amounts and fee before signing.
+    const int sp_retval = process_silent_payments(network_id, psbt, sp_summary, &sp_result, errmsg);
+    free(sp_summary);
+    if (sp_retval || sp_result == SP_SHARES_ONLY || sp_result == SP_MUSIG_CONTRIBUTE) {
+        // An error, or shares added and the psbt ready to return unsigned
+        return sp_retval;
     }
     if (sp_result == SP_MUSIG_SIGN && !show_sp_musig_sign_activity()) {
         *errmsg = "User declined MuSig2 silent payment round 2";
@@ -1146,7 +1174,7 @@ int sign_psbt(jade_process_t* process, CborValue* params, const network_t networ
     display_processing_message_activity();
 
     if (sp_result == SP_MUSIG_SIGN && !sp_musig_sign_psbt(network_id, psbt, musig_inputs, errmsg)) {
-        retval = CBOR_RPC_BAD_PARAMETERS;
+        retval = silent_payment_error(*errmsg);
         goto cleanup;
     }
 
