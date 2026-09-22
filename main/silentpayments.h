@@ -14,6 +14,10 @@
 
 struct wally_psbt;
 
+/* The error reported when a silent payment is too large for the memory the
+ * device has free. sign_psbt() recognises it to tell the user so. */
+#define SP_NO_MEMORY_ERROR "Not enough memory for this silent payment"
+
 /** What sp_process_psbt() did, and hence what the caller should do next. */
 typedef enum {
     // The psbt has no silent payment outputs, and was not touched
