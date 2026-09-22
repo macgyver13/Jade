@@ -25,6 +25,7 @@
 #include <wally_script.h>
 #include <wally_transaction.h>
 
+#include <esp_heap_caps.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -56,53 +57,128 @@ static bool sp_collaborative_enabled(void)
 #endif
 }
 
-// libwally's aggregate silent payment calls aggregate keys and derive BIP32
-// children several frames deep, which overflows the main task's stack, so they
-// run on a temporary task like descriptor evaluation does
-#define SP_MUSIG_STACK_SIZE 16384
+// libwally's silent payment calls do ECDH, DLEQ proofs, key aggregation and
+// BIP32 derivation several frames deep, which overflows the main task's stack,
+// so they run on a temporary task like descriptor evaluation does
+#define SP_CALL_STACK_SIZE 16384
+// Task control block and bookkeeping allocated alongside the task's stack
+#define SP_CALL_TASK_OVERHEAD 1024
+// Estimated heap per serialized psbt byte while a silent payment is processed:
+// the parsed psbt, libwally's staged copy, and their per-field allocations.
+// An estimate, not a measurement: it errs high to refuse early rather than
+// abort part way on an allocation Jade cannot recover from.
+#define SP_HEAP_PER_PSBT_BYTE 3
 
-typedef enum { SP_MUSIG_STATUS, SP_MUSIG_ROUND1, SP_MUSIG_ROUND2 } sp_musig_call_t;
+typedef enum {
+    SP_CALL_STATUS,
+    SP_CALL_RESOLVE,
+    SP_CALL_CONTRIBUTE,
+    SP_CALL_RESOLVE_SHARES,
+    SP_CALL_MUSIG_STATUS,
+    SP_CALL_MUSIG_ROUND1,
+    SP_CALL_MUSIG_ROUND2
+} sp_call_t;
 
 typedef struct {
-    sp_musig_call_t call;
+    sp_call_t call;
     struct wally_psbt* psbt;
     const struct wally_sp_musig_input* values;
     size_t num_values;
-    const uint32_t* signer_indices;
-    size_t num_signers;
+    const uint32_t* indices; // Inputs contributed for, or aggregate inputs signed
+    size_t num_keys; // One private key per index, or per input for resolving
     const uint8_t* seckeys;
     const uint8_t* entropy;
     struct wally_musig_secnonce** secnonces;
     uint8_t* digest;
     size_t* status;
     int ret;
-} sp_musig_call_args_t;
+} sp_call_args_t;
 
-static bool sp_musig_call_impl(void* ctx)
+static bool sp_call_impl(void* ctx)
 {
-    sp_musig_call_args_t* const args = ctx;
-    const size_t keys_len = args->num_signers * EC_PRIVATE_KEY_LEN;
+    sp_call_args_t* const args = ctx;
+    const size_t keys_len = args->num_keys * EC_PRIVATE_KEY_LEN;
     switch (args->call) {
-    case SP_MUSIG_STATUS:
+    case SP_CALL_STATUS:
+        args->ret = wally_psbt_get_sp_status(args->psbt, 0, args->status);
+        break;
+    case SP_CALL_RESOLVE:
+        args->ret = wally_psbt_sp_resolve(args->psbt, args->seckeys, keys_len, args->entropy, SP_DLEQ_ENTROPY_LEN, 0);
+        break;
+    case SP_CALL_CONTRIBUTE:
+        args->ret = wally_psbt_sp_contribute(args->psbt, args->indices, args->num_keys, args->seckeys, keys_len,
+            args->entropy, SP_DLEQ_ENTROPY_LEN, 0);
+        break;
+    case SP_CALL_RESOLVE_SHARES:
+        args->ret = wally_psbt_sp_resolve_shares(args->psbt, 0);
+        break;
+    case SP_CALL_MUSIG_STATUS:
         args->ret = wally_psbt_get_sp_musig_status(args->psbt, args->values, args->num_values, 0, args->status);
         break;
-    case SP_MUSIG_ROUND1:
-        args->ret = wally_psbt_sp_musig_round1(args->psbt, args->values, args->num_values, args->signer_indices,
-            args->num_signers, args->seckeys, keys_len, args->entropy, (args->num_signers + 1) * SHA256_LEN, 0,
+    case SP_CALL_MUSIG_ROUND1:
+        args->ret = wally_psbt_sp_musig_round1(args->psbt, args->values, args->num_values, args->indices,
+            args->num_keys, args->seckeys, keys_len, args->entropy, (args->num_keys + 1) * SHA256_LEN, 0,
             args->secnonces, args->digest, SHA256_LEN, args->status);
         break;
-    case SP_MUSIG_ROUND2:
-        args->ret = wally_psbt_sp_musig_round2(args->psbt, args->values, args->num_values, args->signer_indices,
-            args->num_signers, args->seckeys, keys_len, args->secnonces, args->digest, SHA256_LEN, 0);
+    case SP_CALL_MUSIG_ROUND2:
+        args->ret = wally_psbt_sp_musig_round2(args->psbt, args->values, args->num_values, args->indices,
+            args->num_keys, args->seckeys, keys_len, args->secnonces, args->digest, SHA256_LEN, 0);
         break;
     }
     return true;
 }
 
-static int sp_musig_call(sp_musig_call_args_t* args)
+// The heap the temporary task's stack is taken from, as temporary_stack.c uses
+static size_t sp_largest_free_block(void)
 {
+#ifdef CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM
+    return heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT | MALLOC_CAP_SPIRAM);
+#else
+    return heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT | MALLOC_CAP_INTERNAL);
+#endif
+}
+
+// Returns WALLY_ENOMEM, rather than aborting as creating the task would, if
+// there is no block of memory large enough for its stack
+static int sp_call(sp_call_args_t* args)
+{
+    if (sp_largest_free_block() < SP_CALL_STACK_SIZE + SP_CALL_TASK_OVERHEAD) {
+        JADE_LOGE("No %u byte block for a silent payment task", SP_CALL_STACK_SIZE + SP_CALL_TASK_OVERHEAD);
+        return WALLY_ENOMEM;
+    }
     args->ret = WALLY_ERROR;
-    return run_in_temporary_task(SP_MUSIG_STACK_SIZE, sp_musig_call_impl, args) ? args->ret : WALLY_ERROR;
+    const int ret = run_in_temporary_task(SP_CALL_STACK_SIZE, sp_call_impl, args) ? args->ret : WALLY_ERROR;
+    if (ret != WALLY_OK) {
+        JADE_LOGW("Silent payment call %d returned %d", args->call, ret);
+    }
+    return ret;
+}
+
+// The error to report for a failed libwally call: running out of memory is
+// not the psbt's fault, and must not read as though its contents were bad
+static const char* sp_call_error(const int ret, const char* invalid_errmsg)
+{
+    return ret == WALLY_ENOMEM ? SP_NO_MEMORY_ERROR : invalid_errmsg;
+}
+
+// Refuse a silent payment up front if it looks too large to process. Jade's
+// own allocations abort the device when they fail, so running out part way
+// would reboot it instead of reporting an error.
+static bool sp_check_memory(const struct wally_psbt* psbt, const char** errmsg)
+{
+    size_t psbt_len = 0;
+    if (wally_psbt_get_length(psbt, 0, &psbt_len) != WALLY_OK) {
+        *errmsg = "Failed to size psbt";
+        return false;
+    }
+    const size_t needed = SP_CALL_STACK_SIZE + SP_CALL_TASK_OVERHEAD + psbt_len * SP_HEAP_PER_PSBT_BYTE;
+    const size_t available = heap_caps_get_free_size(MALLOC_CAP_DEFAULT);
+    if (available < needed || sp_largest_free_block() < SP_CALL_STACK_SIZE + SP_CALL_TASK_OVERHEAD) {
+        JADE_LOGE("Silent payment needs ~%u bytes, %u free", needed, available);
+        *errmsg = SP_NO_MEMORY_ERROR;
+        return false;
+    }
+    return true;
 }
 
 static bool sp_musig_descriptor_matches(const network_t network_id, const uint32_t branch, const uint32_t index,
@@ -579,14 +655,16 @@ static bool sp_check_psbt(const struct wally_psbt* psbt, size_t* sp_status, cons
         return false;
     }
 
-    const int status_ret = wally_psbt_get_sp_status(psbt, 0, sp_status);
+    // Checking the status only reads the psbt
+    sp_call_args_t args = { .call = SP_CALL_STATUS, .psbt = (struct wally_psbt*)psbt, .status = sp_status };
+    const int status_ret = sp_call(&args);
     if (status_ret == WALLY_ERROR) {
         // An input wally cannot classify, eg. an unknown witness version
         *errmsg = "Silent payments do not support Segwit versions above 1";
         return false;
     }
     if (status_ret != WALLY_OK || *sp_status == WALLY_SP_INVALID) {
-        *errmsg = "Silent payment ECDH shares or DLEQ proofs are invalid";
+        *errmsg = sp_call_error(status_ret, "Silent payment ECDH shares or DLEQ proofs are invalid");
         return false;
     }
     return true;
@@ -827,15 +905,15 @@ static bool sp_process_musig_psbt(const network_t network_id, const struct wally
     }
     size_t status = WALLY_SP_INVALID;
     // Checking the status only reads the psbt
-    sp_musig_call_args_t status_args = { .call = SP_MUSIG_STATUS,
+    sp_call_args_t status_args = { .call = SP_CALL_MUSIG_STATUS,
         .psbt = (struct wally_psbt*)psbt,
         .values = values,
         .num_values = num_inputs,
         .status = &status };
-    const int status_ret = sp_musig_call(&status_args);
+    const int status_ret = sp_call(&status_args);
     free(values);
     if (status_ret != WALLY_OK || status == WALLY_SP_INVALID) {
-        *errmsg = "Silent payment outputs do not match the shares";
+        *errmsg = sp_call_error(status_ret, "Silent payment outputs do not match the shares");
         goto cleanup;
     }
 
@@ -944,6 +1022,9 @@ bool sp_process_psbt(const network_t network_id, struct wally_psbt* psbt, sp_sum
     if (!sp_num_outputs(psbt)) {
         return true;
     }
+    if (!sp_check_memory(psbt, errmsg)) {
+        return false;
+    }
 
     if (sp_has_musig_inputs(psbt)) {
         return sp_process_musig_psbt(network_id, psbt, summary, result, errmsg);
@@ -1010,10 +1091,14 @@ bool sp_process_psbt(const network_t network_id, struct wally_psbt* psbt, sp_sum
         // A sender may propose the output scripts; wally rejects any that
         // differ from what it derives, and leaves the psbt untouched if so
         get_random(entropy, sizeof(entropy));
-        if (wally_psbt_sp_resolve(
-                psbt, seckeys, summary->num_inputs_ours * EC_PRIVATE_KEY_LEN, entropy, sizeof(entropy), 0)
-            != WALLY_OK) {
-            *errmsg = "Failed to derive silent payment outputs, or a proposed script did not match";
+        sp_call_args_t args = { .call = SP_CALL_RESOLVE,
+            .psbt = psbt,
+            .num_keys = summary->num_inputs_ours,
+            .seckeys = seckeys,
+            .entropy = entropy };
+        const int ret = sp_call(&args);
+        if (ret != WALLY_OK) {
+            *errmsg = sp_call_error(ret, "Failed to derive silent payment outputs, or a proposed script did not match");
             goto cleanup;
         }
     }
@@ -1046,6 +1131,9 @@ bool sp_contribute_psbt(
         *errmsg = "Not a silent payment";
         return false;
     }
+    if (!sp_check_memory(psbt, errmsg)) {
+        return false;
+    }
 
     if (sp_has_musig_inputs(psbt)) {
         sp_musig_input_t* const inputs = JADE_CALLOC(psbt->num_inputs, sizeof(*inputs));
@@ -1058,7 +1146,6 @@ bool sp_contribute_psbt(
         uint8_t* const entropy = JADE_CALLOC(psbt->num_inputs + 1, SHA256_LEN);
         uint8_t ordinary_entropy[SP_DLEQ_ENTROPY_LEN];
         uint8_t digest[SHA256_LEN];
-        struct wally_psbt* staged = NULL;
         size_t num_inputs = 0, num_signers = 0, num_ordinary_inputs = 0, status = WALLY_SP_INVALID;
         bool success = false;
         key_iter iter;
@@ -1069,18 +1156,6 @@ bool sp_contribute_psbt(
         SENSITIVE_PUSH(entropy, (psbt->num_inputs + 1) * SHA256_LEN);
         SENSITIVE_PUSH(ordinary_entropy, sizeof(ordinary_entropy));
 
-        if (!sp_collect_musig_inputs(network_id, psbt, false, inputs, psbt->num_inputs, &num_inputs, errmsg)) {
-            goto musig_cleanup;
-        }
-        // Wally needs every aggregate input described, and keys for ours only
-        for (size_t i = 0; i < num_inputs; ++i) {
-            values[i] = inputs[i].wally;
-            if (inputs[i].is_ours) {
-                signer_indices[num_signers] = i;
-                memcpy(seckeys + num_signers * EC_PRIVATE_KEY_LEN, inputs[i].seckey, EC_PRIVATE_KEY_LEN);
-                ++num_signers;
-            }
-        }
         // Running round 1 again for this transaction replaces its nonces.
         // Other transactions' sessions are left alone.
         if (wally_psbt_get_sp_musig_session_digest(psbt, digest, sizeof(digest)) != WALLY_OK) {
@@ -1102,35 +1177,54 @@ bool sp_contribute_psbt(
                 goto musig_cleanup;
             }
         }
-        if (wally_psbt_clone_alloc(psbt, 0, &staged) != WALLY_OK) {
-            *errmsg = "Failed to prepare MuSig2 silent payment round";
-            goto musig_cleanup;
-        }
+        // Both calls modify the psbt in place, with no copy to fall back on:
+        // on failure sign_psbt() discards the psbt rather than returning it,
+        // and a further copy is memory the device may not have
         if (num_ordinary_inputs) {
             get_random(ordinary_entropy, sizeof(ordinary_entropy));
-            if (wally_psbt_sp_contribute(staged, ordinary_indices, num_ordinary_inputs, ordinary_seckeys,
-                    num_ordinary_inputs * EC_PRIVATE_KEY_LEN, ordinary_entropy, sizeof(ordinary_entropy), 0)
-                != WALLY_OK) {
-                *errmsg = "Failed to add ordinary silent payment shares";
+            sp_call_args_t contribute_args = { .call = SP_CALL_CONTRIBUTE,
+                .psbt = psbt,
+                .indices = ordinary_indices,
+                .num_keys = num_ordinary_inputs,
+                .seckeys = ordinary_seckeys,
+                .entropy = ordinary_entropy };
+            const int ret = sp_call(&contribute_args);
+            if (ret != WALLY_OK) {
+                *errmsg = sp_call_error(ret, "Failed to add ordinary silent payment shares");
                 goto musig_cleanup;
+            }
+        }
+        // The descriptions point into the psbt's own participant lists, which
+        // contributing above replaced, so collect them only now
+        if (!sp_collect_musig_inputs(network_id, psbt, false, inputs, psbt->num_inputs, &num_inputs, errmsg)) {
+            goto musig_cleanup;
+        }
+        // Wally needs every aggregate input described, and keys for ours only
+        for (size_t i = 0; i < num_inputs; ++i) {
+            values[i] = inputs[i].wally;
+            if (inputs[i].is_ours) {
+                signer_indices[num_signers] = i;
+                memcpy(seckeys + num_signers * EC_PRIVATE_KEY_LEN, inputs[i].seckey, EC_PRIVATE_KEY_LEN);
+                ++num_signers;
             }
         }
         // With no aggregate inputs of ours this adds no nonces, but still checks
         // and resolves the shares, and fixes the transaction if they complete
         get_random(entropy, (num_signers + 1) * SHA256_LEN);
-        sp_musig_call_args_t round1_args = { .call = SP_MUSIG_ROUND1,
-            .psbt = staged,
+        sp_call_args_t round1_args = { .call = SP_CALL_MUSIG_ROUND1,
+            .psbt = psbt,
             .values = values,
             .num_values = num_inputs,
-            .signer_indices = num_signers ? signer_indices : NULL,
-            .num_signers = num_signers,
+            .indices = num_signers ? signer_indices : NULL,
+            .num_keys = num_signers,
             .seckeys = num_signers ? seckeys : NULL,
             .entropy = entropy,
             .secnonces = secnonces,
             .digest = digest,
             .status = &status };
-        if (sp_musig_call(&round1_args) != WALLY_OK) {
-            *errmsg = "Failed to add MuSig2 silent payment shares";
+        const int round1_ret = sp_call(&round1_args);
+        if (round1_ret != WALLY_OK) {
+            *errmsg = sp_call_error(round1_ret, "Failed to add MuSig2 silent payment shares");
             goto musig_cleanup;
         }
         for (size_t i = 0; i < num_signers; ++i) {
@@ -1141,11 +1235,6 @@ bool sp_contribute_psbt(
             }
             secnonces[i] = NULL;
         }
-        {
-            struct wally_psbt old = *psbt;
-            *psbt = *staged;
-            *staged = old;
-        }
         *result = SP_SHARES_ONLY;
         success = true;
 
@@ -1153,7 +1242,6 @@ musig_cleanup:
         for (size_t i = 0; i < num_signers; ++i) {
             JADE_WALLY_VERIFY(wally_musig_secnonce_free(secnonces[i]));
         }
-        JADE_WALLY_VERIFY(wally_psbt_free(staged));
         SENSITIVE_POP(ordinary_entropy);
         SENSITIVE_POP(entropy);
         SENSITIVE_POP(ordinary_seckeys);
@@ -1196,17 +1284,27 @@ musig_cleanup:
     }
 
     get_random(entropy, sizeof(entropy));
-    if (wally_psbt_sp_contribute(psbt, indices, summary.num_inputs_ours, seckeys,
-            summary.num_inputs_ours * EC_PRIVATE_KEY_LEN, entropy, sizeof(entropy), 0)
-        != WALLY_OK) {
-        *errmsg = "Failed to add silent payment shares";
+    sp_call_args_t contribute_args = { .call = SP_CALL_CONTRIBUTE,
+        .psbt = psbt,
+        .indices = indices,
+        .num_keys = summary.num_inputs_ours,
+        .seckeys = seckeys,
+        .entropy = entropy };
+    const int contribute_ret = sp_call(&contribute_args);
+    if (contribute_ret != WALLY_OK) {
+        *errmsg = sp_call_error(contribute_ret, "Failed to add silent payment shares");
         goto cleanup;
     }
 
     // Our shares may have been the last ones missing, in which case we can
     // derive the outputs and go on to sign in this same pass. Resolving fails
     // where the coverage is still incomplete, which is not an error here.
-    if (wally_psbt_sp_resolve_shares(psbt, 0) == WALLY_OK) {
+    sp_call_args_t resolve_args = { .call = SP_CALL_RESOLVE_SHARES, .psbt = psbt };
+    const int resolve_ret = sp_call(&resolve_args);
+    if (resolve_ret == WALLY_ENOMEM) {
+        *errmsg = SP_NO_MEMORY_ERROR;
+        goto cleanup;
+    } else if (resolve_ret == WALLY_OK) {
         sp_finalise_resolved(psbt, owned_inputs);
         *result = SP_SIGN;
     } else {
@@ -1268,17 +1366,18 @@ bool sp_musig_sign_psbt(
     // Once taken, every nonce in this session is considered spent on every
     // path, including a libwally validation or signing failure.
     musig_session_clear_digest(digest);
-    sp_musig_call_args_t round2_args = { .call = SP_MUSIG_ROUND2,
+    sp_call_args_t round2_args = { .call = SP_CALL_MUSIG_ROUND2,
         .psbt = psbt,
         .values = values,
         .num_values = num_inputs,
-        .signer_indices = signer_indices,
-        .num_signers = num_signers,
+        .indices = signer_indices,
+        .num_keys = num_signers,
         .seckeys = seckeys,
         .secnonces = secnonces,
         .digest = digest };
-    if (sp_musig_call(&round2_args) != WALLY_OK) {
-        *errmsg = "Failed to sign MuSig2 silent payment inputs";
+    const int round2_ret = sp_call(&round2_args);
+    if (round2_ret != WALLY_OK) {
+        *errmsg = sp_call_error(round2_ret, "Failed to sign MuSig2 silent payment inputs");
         goto cleanup;
     }
     for (size_t i = 0; i < num_signers; ++i) {
