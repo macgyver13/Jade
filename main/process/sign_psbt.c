@@ -1119,6 +1119,10 @@ int sign_psbt(jade_process_t* process, CborValue* params, const network_t networ
     // Sign our inputs
     JADE_WALLY_VERIFY(wally_psbt_signing_cache_enable(psbt, 0));
 
+    uint32_t clear_modifiable_flags = WALLY_PSBT_TXMOD_INPUTS | WALLY_PSBT_TXMOD_OUTPUTS;
+    uint32_t set_modifiable_flags = 0;
+    bool signed_plain_input = false;
+
     for (size_t index = 0; index < psbt->num_inputs; ++index) {
         // See if we flagged this input for signing
         if (!sig_types[index]) {
@@ -1164,6 +1168,26 @@ int sign_psbt(jade_process_t* process, CborValue* params, const network_t networ
             // Continue search from next key index position
             key_iter_next(&iter);
         }
+
+        signed_plain_input = true;
+        const uint32_t sighash = psbt->inputs[index].sighash;
+        if (sighash & WALLY_SIGHASH_ANYONECANPAY) {
+            clear_modifiable_flags &= ~WALLY_PSBT_TXMOD_INPUTS;
+        }
+        if ((sighash & WALLY_SIGHASH_MASK) == WALLY_SIGHASH_NONE) {
+            clear_modifiable_flags &= ~WALLY_PSBT_TXMOD_OUTPUTS;
+        }
+        if ((sighash & WALLY_SIGHASH_MASK) == WALLY_SIGHASH_SINGLE) {
+            set_modifiable_flags |= WALLY_PSBT_TXMOD_SINGLE;
+        }
+    }
+
+    // BIP-370: a signer must update PSBT_GLOBAL_TX_MODIFIABLE to reflect what it
+    // actually signed. Clear Inputs Modifiable unless every input we signed used
+    // SIGHASH_ANYONECANPAY, clear Outputs Modifiable unless every input we signed
+    // used SIGHASH_NONE, and set Has SIGHASH_SINGLE if any input we signed used it.
+    if (signed_plain_input) {
+        psbt->tx_modifiable_flags = (psbt->tx_modifiable_flags & ~clear_modifiable_flags) | set_modifiable_flags;
     }
 
     // No errors - may or may not have added signatures
@@ -1251,15 +1275,19 @@ bool serialise_psbt(const struct wally_psbt* psbt, uint8_t** output, size_t* out
     JADE_INIT_OUT_PPTR(output);
     JADE_INIT_OUT_SIZE(output_len);
 
-    // Serialise updated psbt
+    // Serialise updated psbt. WALLY_PSBT_SERIALIZE_FLAG_REDUNDANT keeps fields such as
+    // sighash_type on inputs that are already finalized (eg. a co-owned input we did not
+    // touch), which BIP-174's Combiner role requires us to preserve.
     size_t psbt_len_out = 0;
-    if (wally_psbt_get_length(psbt, 0, &psbt_len_out) != WALLY_OK) {
+    if (wally_psbt_get_length(psbt, WALLY_PSBT_SERIALIZE_FLAG_REDUNDANT, &psbt_len_out) != WALLY_OK) {
         return false;
     }
 
     uint8_t* psbt_bytes_out = JADE_MALLOC_PREFER_SPIRAM(psbt_len_out);
     size_t written = 0;
-    if (wally_psbt_to_bytes(psbt, 0, psbt_bytes_out, psbt_len_out, &written) != WALLY_OK || written != psbt_len_out) {
+    if (wally_psbt_to_bytes(psbt, WALLY_PSBT_SERIALIZE_FLAG_REDUNDANT, psbt_bytes_out, psbt_len_out, &written)
+            != WALLY_OK
+        || written != psbt_len_out) {
         free(psbt_bytes_out);
         return false;
     }
