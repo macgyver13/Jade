@@ -82,6 +82,12 @@ void wallet_get_bip85_rsa_entropy(
 
 void wallet_get_default_xpub_export_path(
     script_variant_t variant, uint16_t account, uint32_t* path, size_t path_len, size_t* written);
+
+// bip352 account path - purpose'/cointype'/account'
+#define SP_EXPORT_PATH_LEN 3
+void wallet_get_default_sp_export_path(
+    network_t network_id, uint16_t account, uint32_t* path, size_t path_len, size_t* written);
+
 bool wallet_is_expected_singlesig_path(
     network_t network_id, script_variant_t script_variant, bool is_change, const uint32_t* path, size_t path_len);
 bool wallet_is_expected_multisig_path(size_t cosigner_index, bool is_change, const uint32_t* path, size_t path_len);
@@ -95,6 +101,9 @@ WARN_UNUSED_RESULT bool wallet_build_ga_script(network_t network_id, const char*
     const uint32_t* path, size_t path_len, uint8_t* output, size_t output_len, size_t* written);
 WARN_UNUSED_RESULT bool wallet_build_singlesig_script(network_t network_id, script_variant_t script_variant,
     const struct ext_key* hdkey, uint8_t* output, size_t output_len, size_t* written);
+// Returns true if the singlesig script built for `hdkey` matches `target_script`
+WARN_UNUSED_RESULT bool wallet_verify_singlesig_script_matches(network_t network_id, script_variant_t script_variant,
+    const struct ext_key* hdkey, const uint8_t* target_script, size_t target_script_len);
 WARN_UNUSED_RESULT bool wallet_search_for_singlesig_script(network_t network_id, script_variant_t script_variant,
     const struct ext_key* search_root, uint32_t* index, size_t search_depth, const uint8_t* script, size_t script_len);
 WARN_UNUSED_RESULT bool wallet_build_multisig_script(script_variant_t script_variant, bool sorted, uint8_t threshold,

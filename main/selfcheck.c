@@ -7,7 +7,9 @@
 #include "random.h"
 #include "rsa.h"
 #include "selfcheck.h"
+#include "silentpayments.h"
 #include "storage.h"
+#include "utils/address.h"
 #include "utils/malloc_ext.h"
 #include "utils/shake256.h"
 #include "utils/util.h"
@@ -21,6 +23,7 @@
 
 #include <wally_bip32.h>
 #include <wally_bip85.h>
+#include <wally_core.h>
 
 int register_multisig_file(const char* multisig_file, size_t multisig_file_len, const char** errmsg);
 
@@ -35,6 +38,82 @@ static const size_t FULL_KEY_BLOBLEN = 256;
 static const size_t MNEMONIC_12_ENTROPY_BLOBLEN = 80;
 // 16 (iv) + 48 (24-word entropy (32) padded to next 16x) + 32 (hmac)
 static const size_t MNEMONIC_24_ENTROPY_BLOBLEN = 96;
+
+static bool test_sp_address_encoding(void)
+{
+    /* First recipient from the BIP-352 reference vectors. */
+    static const char PAYLOAD_HEX[] = "0220bcfac5b99e04ad1a06ddfb016ee13582609d60b6291e98d01a9bc9a16c96d4"
+                                      "025cc9856d6f8375350e123978daac200c260cb5b5ae83106cab90484dcd8fcf36";
+    static const char EXPECTED_MAINNET[]
+        = "sp1qqgste7k9hx0qftg6qmwlkqtwuy6cycyavzmzj85c6qdfhjdpdjtdgqjuexzk6murw56suy3e0rd2cgqvycxttddwsvgx"
+          "e2usfpxumr70xc9pkqwv";
+    static const char EXPECTED_TESTNET[]
+        = "tsp1qqgste7k9hx0qftg6qmwlkqtwuy6cycyavzmzj85c6qdfhjdpdjtdgqjuexzk6murw56suy3e0rd2cgqvycxttddwsvg"
+          "xe2usfpxumr70xc3wk4yh";
+
+    uint8_t payload[66];
+    size_t written = 0;
+    if (wally_hex_to_bytes(PAYLOAD_HEX, payload, sizeof(payload), &written) != WALLY_OK || written != sizeof(payload)) {
+        FAIL();
+    }
+
+    char address[MAX_ADDRESS_LEN];
+    if (!sp_encode_address(NETWORK_BITCOIN, payload, sizeof(payload), address, sizeof(address))
+        || strcmp(address, EXPECTED_MAINNET) || strlen(address) != 116) {
+        FAIL();
+    }
+    if (!sp_encode_address(NETWORK_BITCOIN_TESTNET, payload, sizeof(payload), address, sizeof(address))
+        || strcmp(address, EXPECTED_TESTNET) || strlen(address) != 117) {
+        FAIL();
+    }
+    /* Reject a payload that is not a scan and spend pubkey pair */
+    if (sp_encode_address(NETWORK_BITCOIN, payload, sizeof(payload) - 1, address, sizeof(address))) {
+        FAIL();
+    }
+
+    /* Reject an output buffer too small to hold the encoded address. */
+    if (sp_encode_address(NETWORK_BITCOIN, payload, sizeof(payload), address, 116) || address[0] != '\0') {
+        FAIL();
+    }
+
+    return true;
+}
+
+static bool test_silentpayments_descriptor_export(jade_process_t* process)
+{
+    JADE_ASSERT(process);
+
+    /* The bip392 scan descriptor for TEST_MNEMONIC, account 0, on mainnet */
+    static const char EXPECTED[]
+        = "sp([e3ebcc79/352h/0h/0h]spscan1qmx0kcppqwe4me9g3evu2q0pd5et3uesnxsnthdaevdnyw7df8s6syvale64m4p9ap4hmzvt83s"
+          "79jksmrp4y70fr93k8femdzggtc8f395mepn)#3afjkasy";
+
+    keychain_t keydata = { 0 };
+    if (!keychain_derive_from_mnemonic(TEST_MNEMONIC, NULL, &keydata)) {
+        FAIL();
+    }
+    keychain_set(&keydata, process->ctx.source, true);
+
+    char descriptor[SP_DESCRIPTOR_MAX_LEN];
+    if (!sp_build_scan_descriptor(NETWORK_BITCOIN, 0, descriptor, sizeof(descriptor))
+        || strcmp(descriptor, EXPECTED)) {
+        JADE_LOGE("%s\nvs\n%s", descriptor, EXPECTED);
+        FAIL();
+    }
+
+    /* A different account index or network must yield a different descriptor */
+    char other[SP_DESCRIPTOR_MAX_LEN];
+    if (!sp_build_scan_descriptor(NETWORK_BITCOIN, 1, other, sizeof(other)) || !strcmp(other, descriptor)) {
+        FAIL();
+    }
+    if (!sp_build_scan_descriptor(NETWORK_BITCOIN_TESTNET, 0, other, sizeof(other))
+        || !strcmp(other, descriptor)) {
+        FAIL();
+    }
+
+    keychain_clear();
+    return true;
+}
 
 // *All* fields are identical
 static bool all_fields_same(const keychain_t* keydata1, const keychain_t* keydata2, const bool strict_seeds)
@@ -514,6 +593,13 @@ static bool test_bip85_rsa_key_gen(jade_process_t* process)
 bool debug_selfcheck(jade_process_t* process)
 {
     JADE_ASSERT(process);
+
+    if (!test_sp_address_encoding()) {
+        FAIL();
+    }
+    if (!test_silentpayments_descriptor_export(process)) {
+        FAIL();
+    }
 
     // Test can restore known mnemonic and service path is computed as expected
     if (!test_simple_restore()) {
