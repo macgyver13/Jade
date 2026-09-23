@@ -1,0 +1,9 @@
+{
+  "id": "origin_script_mismatch_p2wpkh",
+  "description": "A Jade origin must match its P2WPKH UTXO script",
+  "input": {
+    "network": "localtest",
+    "psbt": "cHNidP8BAgQCAAAAAQQBAQEFAQEBBgEAAfsEAgAAAAABAR+ghgEAAAAAABYAFGHdORo8daakGkiGCAeKS0gfNEr0IgYC6nmVbWoYQJHE2uF3iwzr8o+suHwRi35Wyy/ZT8RCwUAYWdHzsFQAAIABAACAAAAAgAAAAAAAAAAAAQ4g4VzKXC81MAAdTsuds/KiTNRRvAJPo/QiMY0ZhfI4dL8BDwQAAAAAARAE/v///wABAwgYcwEAAAAAAAEJQgJ6SH/Bn7dph3uHQtbqGBGPPE5yseqMbeYCp61KQdvgaANh4bHp3l5CyyAH98pUueDVftE5OPrVbT8Z5XUTqPzgOQA="
+  },
+  "validation_result": "invalid"
+}
