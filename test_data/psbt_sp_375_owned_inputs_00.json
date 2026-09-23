@@ -1,0 +1,15 @@
+{
+  "id": "owned_p2pkh",
+  "description": "Jade resolves an owned P2PKH input at m/44h/1h/0h/0/0",
+  "input": {
+    "network": "localtest",
+    "psbt": "cHNidP8BAgQCAAAAAQQBAQEFAQIBBgEAAfsEAgAAAAABAFUCAAAAAfTCEtWu0ef2/2M/LOCcZHxXvt2TAxTZjed1A9WOlAszAAAAAAD/////AaCGAQAAAAAAGXapFCz+Jpf953aGfQfE0KTdGYHkUbPAiKwAAAAAIgYDvDda3DgDCStZZ87Zk2pIOCv7qT1qQo+fyIaspDofxg0YWdHzsCwAAIABAACAAAAAgAAAAAAAAAAAAQ4g1SGJElvx87fqorMdHmadRWOb+IDYep0uAgGG+kz8f3oBDwQAAAAAARAE/v///wABAwgYcwEAAAAAAAEJQgJ6SH/Bn7dph3uHQtbqGBGPPE5yseqMbeYCp61KQdvgaANh4bHp3l5CyyAH98pUueDVftE5OPrVbT8Z5XUTqPzgOQAiAgMOHtGxjPAG5bIhpzYtghNvt5NgpQL2yKDMpGzhWhsLNhhZ0fOwLAAAgAEAAIAAAACAAQAAAAEAAAABAwigDwAAAAAAAAEEGXapFMgCnWbLo6tP34X14H+cK/2RwTBciKwA"
+  },
+  "validation_result": "valid",
+  "expected_scripts": [
+    {
+      "output_index": 0,
+      "script": "512092a70563298122985c9284d379636e34880873f7dc170d69d6e66781150b9d2d"
+    }
+  ]
+}

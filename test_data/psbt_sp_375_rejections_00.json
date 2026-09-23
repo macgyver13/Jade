@@ -1,0 +1,9 @@
+{
+  "id": "foreign_inputs_only",
+  "description": "Only foreign eligible inputs are not owned by Jade",
+  "input": {
+    "network": "localtest",
+    "psbt": "cHNidP8BAgQCAAAAAQQBAQEFAQEBBgEAAfsEAgAAAAABAR+ghgEAAAAAABYAFAwVpKPpgQSvv3f9e5JWFk1B08/kIgYDeWLUWzjovPgvqO+oQyoB8gyaU+JMfT8R3xl8uOcJJtoY3q2+71QAAIABAACAAAAAgAAAAAAAAAAAAQ4gPQnNmu4RugALG9q0KVVGuHX60yHC/8fgQPkROpQ72MsBDwQAAAAAARAE/v///wABAwgYcwEAAAAAAAEJQgJ6SH/Bn7dph3uHQtbqGBGPPE5yseqMbeYCp61KQdvgaANh4bHp3l5CyyAH98pUueDVftE5OPrVbT8Z5XUTqPzgOQA="
+  },
+  "validation_result": "invalid"
+}

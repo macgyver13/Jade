@@ -1,0 +1,15 @@
+{
+  "id": "decoy_tap_leaf_p2tr",
+  "description": "Jade resolves a P2TR input carrying a script-path derivation",
+  "input": {
+    "network": "localtest",
+    "psbt": "cHNidP8BAgQCAAAAAQQBAQEFAQEBBgEAAfsEAgAAAAABASughgEAAAAAACJRILcap5yrCuLYO4LUTL3CP13Mo3l+i6YixORaj33OKLoOAQ4grcHSHN4au1ZR+I/TZI93Wg50NSlu08GD3f6mE+1PARgBDwQAAAAAARAE/v///yEWGHNcjlN3hqXDoKTOApkPD1PkLLk8bBVe+FDWzF1HNuspAb0tdVDgHU2lo7fm84HscDDwK21zCRwhIQSAKSpcnmwTAAAAgP8AAAAhFvZYCC1/XsRm1hIgrtFCk5HXvt+PA0KMnX5AYtgONzRaGQBZ0fOwVgAAgAEAAIAAAACAAAAAAAAAAAABFyD2WAgtf17EZtYSIK7RQpOR177fjwNCjJ1+QGLYDjc0WgABAwgYcwEAAAAAAAEJQgJ6SH/Bn7dph3uHQtbqGBGPPE5yseqMbeYCp61KQdvgaANh4bHp3l5CyyAH98pUueDVftE5OPrVbT8Z5XUTqPzgOQA="
+  },
+  "validation_result": "valid",
+  "expected_scripts": [
+    {
+      "output_index": 0,
+      "script": "51202f809e0ba436fb892930b548a9b1c70ea1adee1a18b408b41866bf33a552fd6a"
+    }
+  ]
+}
