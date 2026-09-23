@@ -1,0 +1,15 @@
+{
+  "id": "decoy_same_origin_p2wpkh",
+  "description": "Jade resolves a P2WPKH input whose decoy shares its own origin",
+  "input": {
+    "network": "localtest",
+    "psbt": "cHNidP8BAgQCAAAAAQQBAQEFAQEBBgEAAfsEAgAAAAABAR+ghgEAAAAAABYAFDSWLUEqVomqEjNymRZhyDeKUy1hIgYCoP5+TCusvtQtaMvBlYK3/FSZDasMRP5CVg5BoGg3SmUYWdHzsFQAAIABAACAAAAAgAAAAAABAAAAIgYC6nmVbWoYQJHE2uF3iwzr8o+suHwRi35Wyy/ZT8RCwUAYWdHzsFQAAIABAACAAAAAgAAAAAAAAAAAAQ4gDveveoma4N+gZ1tliMeGGn4IhAMFAKkoGhTCu0wRMkQBDwQAAAAAARAE/v///wABAwgYcwEAAAAAAAEJQgJ6SH/Bn7dph3uHQtbqGBGPPE5yseqMbeYCp61KQdvgaANh4bHp3l5CyyAH98pUueDVftE5OPrVbT8Z5XUTqPzgOQA="
+  },
+  "validation_result": "valid",
+  "expected_scripts": [
+    {
+      "output_index": 0,
+      "script": "5120709a15025b05c3446db3d4fd08971b8a30e9e808812a006734567459175f3cdc"
+    }
+  ]
+}

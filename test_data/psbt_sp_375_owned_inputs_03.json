@@ -1,0 +1,15 @@
+{
+  "id": "owned_p2tr",
+  "description": "Jade resolves an owned BIP86 P2TR input",
+  "input": {
+    "network": "localtest",
+    "psbt": "cHNidP8BAgQCAAAAAQQBAQEFAQEBBgEAAfsEAgAAAAABASughgEAAAAAACJRILcap5yrCuLYO4LUTL3CP13Mo3l+i6YixORaj33OKLoOAQ4grcHSHN4au1ZR+I/TZI93Wg50NSlu08GD3f6mE+1PARgBDwQAAAAAARAE/v///yEW9lgILX9exGbWEiCu0UKTkde+348DQoydfkBi2A43NFoZAFnR87BWAACAAQAAgAAAAIAAAAAAAAAAAAEXIPZYCC1/XsRm1hIgrtFCk5HXvt+PA0KMnX5AYtgONzRaAAEDCBhzAQAAAAAAAQlCAnpIf8Gft2mHe4dC1uoYEY88TnKx6oxt5gKnrUpB2+BoA2HhseneXkLLIAf3ylS54NV+0Tk4+tVtPxnldROo/OA5AA=="
+  },
+  "validation_result": "valid",
+  "expected_scripts": [
+    {
+      "output_index": 0,
+      "script": "51202f809e0ba436fb892930b548a9b1c70ea1adee1a18b408b41866bf33a552fd6a"
+    }
+  ]
+}
