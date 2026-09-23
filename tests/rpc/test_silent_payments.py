@@ -67,12 +67,51 @@ def _serialize_psbt_maps(globals_, inputs, outputs):
     return b'psbt\xff' + b''.join(_write_psbt_map(fields) for fields in maps)
 
 
+def _duplicate_sp_output(psbt):
+    """Add a second silent payment output paying the same address as the first.
+
+    The copy is placed alongside the original so the silent payment outputs are
+    outputs 0 and 1. Both share a scan and spend key, which BIP375 orders by
+    output index. The copy is paid for out of the change, so the fee is unchanged.
+    """
+    globals_, inputs, outputs = _parse_psbt_maps(psbt)
+    duplicate = list(outputs[0])
+    amount = int.from_bytes(dict(duplicate)[b'\x03'], 'little')
+    assert dict(outputs[1]).get(b'\x09') is None, 'Second output is not the change'
+
+    change = int.from_bytes(dict(outputs[1])[b'\x03'], 'little') - amount
+    outputs[1] = [(key, change.to_bytes(8, 'little') if key == b'\x03' else value)
+                  for key, value in outputs[1]]
+    outputs.insert(1, duplicate)
+
+    count = _write_compact_size(len(outputs))
+    globals_ = [(key, count if key == b'\x05' else value) for key, value in globals_]
+    return globals_, inputs, outputs
+
+
+def _check_silent_payment_psbt(psbt, silent_payment_info):
+    globals_, inputs, outputs = _parse_psbt_maps(psbt)
+    globals_by_key = dict(globals_)
+    scan_key = silent_payment_info[:33]
+    assert globals_by_key.get(b'\x06', b'\x00') == b'\x00'
+    assert len(globals_by_key[b'\x07' + scan_key]) == 33
+    assert len(globals_by_key[b'\x08' + scan_key]) == 64
+    # Jade does not set a sighash of its own, so the input's field stays absent
+    assert b'\x03' not in dict(inputs[0])
+    assert any(key[:1] == b'\x02' for key, _ in inputs[0])
+    assert dict(outputs[0])[b'\x09'] == silent_payment_info
+    script = dict(outputs[0])[b'\x04']
+    assert len(script) == 34 and script[:2] == b'\x51\x20'
+    return script, globals_by_key[b'\x08' + scan_key]
+
+
 # What Jade answers for each psbt_sp_375_* rejection vector, keyed by the id the
 # vector carries. The vectors hold no error strings of their own, so the corpus
 # says what a case is and this map says what Jade should make of it, and neither
 # can drift into the other.
 SP_NOT_OURS = "This wallet owns none of the silent payment's eligible inputs"
 SP_BAD_PROOFS = 'Silent payment ECDH shares or DLEQ proofs are invalid'
+SP_NO_DERIVE = 'Failed to derive silent payment outputs, or a proposed script did not match'
 SP_SIGHASH = 'Silent payments require SIGHASH_ALL, or SIGHASH_DEFAULT on a taproot input'
 
 SP_375_REJECTIONS = {
@@ -198,6 +237,76 @@ def test_silent_payment_roundtrip(jade, mnemonic):
     if not test_sp_roundtrip.load_wally():
         pytest.skip('No libwally host build')
     test_sp_roundtrip.run_roundtrip(jade, 'localtest', verbose=False)
+
+
+@pytest.mark.mnemonic(mnemonics.singlesig)
+@with_test_cases('tests/rpc/data/sign_psbt/psbt_sp_resolve_sign.json')
+def test_silent_payment_sign_psbt(jade, mnemonic, test_case):
+    network = test_case['input']['network']
+    psbt = test_case['input']['psbt']
+    silent_payment_info = test_case['silent_payment_info']
+
+    first = _check_silent_payment_psbt(jade.sign_psbt(network, psbt), silent_payment_info)
+    second = _check_silent_payment_psbt(jade.sign_psbt(network, psbt), silent_payment_info)
+    assert first[0] == second[0]
+    assert first[1] != second[1]
+
+    # A psbt whose outputs another signer has resolved is verified and signed
+    # as-is, not derived again. Deriving picks fresh entropy for the proof, as
+    # the two differing proofs above show, so a proof that survives unchanged
+    # is what shows the final signer path was taken.
+    resolved = jade.sign_psbt(network, psbt)
+    before = _check_silent_payment_psbt(resolved, silent_payment_info)
+    after = _check_silent_payment_psbt(jade.sign_psbt(network, resolved), silent_payment_info)
+    assert after == before
+
+    globals_, inputs, outputs = _parse_psbt_maps(psbt)
+    inputs[0].append((b'\x03', (2).to_bytes(4, 'little')))
+    with pytest.raises(JadeError) as err:
+        jade.sign_psbt(network, _serialize_psbt_maps(globals_, inputs, outputs))
+    assert err.value.message == SP_SIGHASH
+
+    # Stripping the keypath makes the sole eligible input foreign, leaving
+    # Jade with no key to contribute a share with, let alone resolve the
+    # outputs. There is nothing it can usefully do with such a psbt.
+    globals_, inputs, outputs = _parse_psbt_maps(psbt)
+    inputs[0] = [(key, value) for key, value in inputs[0] if key[:1] != b'\x06']
+    with pytest.raises(JadeError) as err:
+        jade.sign_psbt(network, _serialize_psbt_maps(globals_, inputs, outputs))
+    assert err.value.message == SP_NOT_OURS
+
+    # A proposed script on a silent payment output must be the one Jade
+    # derives. With a single silent payment output a proposed script makes the
+    # psbt claim to be resolved, so a second unresolved output is needed to
+    # keep Jade on the deriving path and reach the comparison.
+    two_sp = _duplicate_sp_output(psbt)
+    outputs = _parse_psbt_maps(jade.sign_psbt(network, _serialize_psbt_maps(*two_sp)))[2]
+    derived = [dict(output)[b'\x04'] for output in outputs[:2]]
+
+    # A script on a silent payment output makes it resolved, and BIP375
+    # requires resolved outputs to be unmodifiable, so the flags must be
+    # cleared or Jade refuses to sign.
+    globals_, inputs, outputs = _duplicate_sp_output(psbt)
+    globals_ = [(key, b'\x00' if key == b'\x06' else value) for key, value in globals_]
+    outputs[0].append((b'\x04', derived[0]))
+    signed = _parse_psbt_maps(jade.sign_psbt(network, _serialize_psbt_maps(globals_, inputs, outputs)))[2]
+    assert [dict(output)[b'\x04'] for output in signed[:2]] == derived
+
+    globals_, inputs, outputs = _duplicate_sp_output(psbt)
+    globals_ = [(key, b'\x00' if key == b'\x06' else value) for key, value in globals_]
+    outputs[0].append((b'\x04', derived[0][:-1] + bytes([derived[0][-1] ^ 1])))
+    with pytest.raises(JadeError) as err:
+        jade.sign_psbt(network, _serialize_psbt_maps(globals_, inputs, outputs))
+    assert err.value.message == SP_NO_DERIVE
+
+    # An output script on every silent payment output makes the psbt claim to
+    # be resolved, which BIP375 requires ECDH shares to accompany. It has none.
+    globals_, inputs, outputs = _parse_psbt_maps(psbt)
+    globals_ = [(key, b'\x00' if key == b'\x06' else value) for key, value in globals_]
+    outputs[0].append((b'\x04', b'\x51\x20' + bytes(32)))
+    with pytest.raises(JadeError) as err:
+        jade.sign_psbt(network, _serialize_psbt_maps(globals_, inputs, outputs))
+    assert err.value.message == SP_BAD_PROOFS
 
 
 @pytest.mark.mnemonic(mnemonics.singlesig)
