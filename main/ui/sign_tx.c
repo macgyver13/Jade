@@ -420,6 +420,42 @@ static bool show_input_output_activity(const char* title, const bool is_wallet_o
     }
 }
 
+bool show_sp_contribute_activity(const sp_summary_t* summary)
+{
+    JADE_ASSERT(summary);
+    JADE_ASSERT(summary->num_inputs_ours);
+    JADE_ASSERT(summary->num_recipients);
+
+    // The recipients are the only part of the payment that can be shown: the
+    // psbt names them, whereas the output scripts - and so the amounts and any
+    // change - cannot be derived until every signer has added its share.
+    for (size_t i = 0; i < summary->num_recipients_shown; ++i) {
+        if (!show_confirm_address_activity_ex("Silent Payment", summary->recipients[i], true, true)) {
+            return false;
+        }
+    }
+
+    char ours[32], others[32], recipients[32];
+    const size_t num_others = summary->num_inputs_covered + summary->num_inputs_uncovered;
+    int ret = snprintf(ours, sizeof(ours), "Your inputs: %u", summary->num_inputs_ours);
+    JADE_ASSERT(ret > 0 && ret < sizeof(ours));
+    ret = snprintf(others, sizeof(others), "Other inputs: %u", num_others);
+    JADE_ASSERT(ret > 0 && ret < sizeof(others));
+    ret = snprintf(recipients, sizeof(recipients), "Recipients: %u", summary->num_recipients);
+    JADE_ASSERT(ret > 0 && ret < sizeof(recipients));
+
+    const char* summary_msg[] = { ours, others, recipients };
+    if (!await_continueback_activity("Silent Payment", summary_msg, 3, true, NULL)) {
+        return false;
+    }
+
+    // Be explicit that this is not signing, and that the amounts have not been
+    // approved - they cannot be shown at all until the payment is resolved
+    const char* story[] = { "Add your shares without", "signing? Other signers",
+        "must add theirs first.", "Amounts approved later." };
+    return await_yesno_activity("Contribute Shares?", story, 4, false, NULL);
+}
+
 bool show_btc_transaction_outputs_activity(
     const network_t network_id, const struct wally_tx* tx, const output_info_t* output_info)
 {
