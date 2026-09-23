@@ -1,0 +1,15 @@
+{
+  "id": "decoy_foreign_origin_p2wpkh",
+  "description": "Jade resolves a P2WPKH input carrying a decoy derivation first",
+  "input": {
+    "network": "localtest",
+    "psbt": "b64:cHNidP8BAgQCAAAAAQQBAQEFAQEBBgEAAfsEAgAAAAABAHECAAAAARinF2Y7C6sUsSoadxMj/x5Aed1TLl3RPijqEIHHAJhKAAAAAAD+////AqCGAQAAAAAAFgAU7TjbCZtVOTtHiU9JCKBAQl1915ughgEAAAAAABYAFDSWLUEqVomqEjNymRZhyDeKUy1hAAAAAAEBH6CGAQAAAAAAFgAUNJYtQSpWiaoSM3KZFmHIN4pTLWEiBgLpaRdBN5kKJWvqnXVczymvAi+GpYxLrz8f+6Iqu0Q8+AgAAACA/wAAACIGAup5lW1qGECRxNrhd4sM6/KPrLh8EYt+Vssv2U/EQsFAGFnR87BUAACAAQAAgAAAAIAAAAAAAAAAAAEOIJLBLyDUeAlHZj6rMDX8irYeJwXsBPyXrHqrox9IitB5AQ8EAQAAAAEQBP7///8AAQMIGHMBAAAAAAABCUICcpls1zf0T/xKqZntYGWXF2AK31mvFBR64RZWG80eY04DzJ0v+6TyNTMvnazNMmhcL9evSZg9t5XRiZ0yyewbbdEA"
+  },
+  "validation_result": "valid",
+  "expected_scripts": [
+    {
+      "output_index": 0,
+      "script": "0x51207c7825df23978868cf0039ffb6a00cc0356181de670d2e363b5fd0ebaee722fe"
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "id": "origin_script_mismatch_p2tr",
+  "description": "A Jade origin must match its P2TR UTXO script",
+  "input": {
+    "network": "localtest",
+    "psbt": "b64:cHNidP8BAgQCAAAAAQQBAQEFAQEBBgEAAfsEAgAAAAABASughgEAAAAAACJRIGLe5ZKm0DnMBzwI7WGB8x4eFn+aJPdDzZzwxHCfSizeAQ4gDKMYiN3rWqBsOj98ZRDXbqW18geqPPV5DqzRf0WUGvEBDwQBAAAAARAE/v///yEW9lgILX9exGbWEiCu0UKTkde+348DQoydfkBi2A43NFoZAFnR87BWAACAAQAAgAAAAIAAAAAAAAAAAAEXIPZYCC1/XsRm1hIgrtFCk5HXvt+PA0KMnX5AYtgONzRaAAEDCBhzAQAAAAAAAQlCAnKZbNc39E/8SqmZ7WBllxdgCt9ZrxQUeuEWVhvNHmNOA8ydL/uk8jUzL52szTJoXC/Xr0mYPbeV0YmdMsnsG23RAA=="
+  },
+  "validation_result": "invalid"
+}

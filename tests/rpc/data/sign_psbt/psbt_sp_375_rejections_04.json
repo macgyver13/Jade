@@ -1,0 +1,9 @@
+{
+  "id": "segwit_v2_input",
+  "description": "Segwit v2 input is rejected for silent payments",
+  "input": {
+    "network": "localtest",
+    "psbt": "b64:cHNidP8BAgQCAAAAAQQBAQEFAQEBBgEAAfsEAgAAAAABAR+ghgEAAAAAABZSFDSWLUEqVomqEjNymRZhyDeKUy1hAQMEAQAAACIGAup5lW1qGECRxNrhd4sM6/KPrLh8EYt+Vssv2U/EQsFAGFnR87BUAACAAQAAgAAAAIAAAAAAAAAAAAEOIAXCgWdq4XZ414YsUoBlJUySFtGDjeI1jnWEVEYxYNWDAQ8EAQAAAAEQBP7///8iHQJymWzXN/RP/Eqpme1gZZcXYArfWa8UFHrhFlYbzR5jTiEC02/pCZLj2elVmbBzDGksRmUNyXY2EqIlA5ngGaAOCHQiHgJymWzXN/RP/Eqpme1gZZcXYArfWa8UFHrhFlYbzR5jTkDDZi52FIaLMfterdGHKl3ahS1nY45f3ksjmAXYRTfbNGmQFlf40DHsaWJVn6r0LZ61W6Z+okGIJak2hgHDiOErAAEDCBhzAQAAAAAAAQQiUSDY1IqSFaAc/UsQlfUhUfhrYE4mtMfXgpiAU7HYoJVZFwEJQgJymWzXN/RP/Eqpme1gZZcXYArfWa8UFHrhFlYbzR5jTgPMnS/7pPI1My+drM0yaFwv169JmD23ldGJnTLJ7Btt0QA="
+  },
+  "validation_result": "invalid"
+}

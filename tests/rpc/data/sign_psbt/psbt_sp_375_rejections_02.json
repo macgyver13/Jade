@@ -1,0 +1,9 @@
+{
+  "id": "ineligible_nums_taproot",
+  "description": "NUMS taproot input is not silent-payment eligible",
+  "input": {
+    "network": "localtest",
+    "psbt": "b64:cHNidP8BAgQCAAAAAQQBAQEFAQEBBgEAAfsEAgAAAAABASughgEAAAAAACJRICG+i0nY1uxr8GEwJe9oKFeYqXr2DtXaB7tet9ZpYewfAQ4gmE5+ZqIdv8rgrmakDHfuDPUf74vFQczjwZ5uWZkUA0sBDwQBAAAAARAE/v///0EU0yyikmsyLxRdds/IsGPuOPTphLUnXHBcd/Np6i3BmNfLAtYsiG2qoOgP46KHLogLMsc1KtA6pxDvSin9Ml3wPkFp/eZrAvwut6npP69Vol0bLaUVRIzRrt3CwVOzGEA+oJZWu5B5K3phPn1Zj9Xl0yFqLwg1CqReYWyfiXwDLdErASIVwFCSm3TBoElUt4tLYDXpel4HiloPKOyW1Ue/7prOgDrAIyDTLKKSazIvFF12z8iwY+449OmEtSdccFx382nqLcGY16zAARcgUJKbdMGgSVS3i0tgNel6XgeKWg8o7JbVR7/ums6AOsABGCDLAtYsiG2qoOgP46KHLogLMsc1KtA6pxDvSin9Ml3wPgABAwgYcwEAAAAAAAEJQgJymWzXN/RP/Eqpme1gZZcXYArfWa8UFHrhFlYbzR5jTgPMnS/7pPI1My+drM0yaFwv169JmD23ldGJnTLJ7Btt0QA="
+  },
+  "validation_result": "invalid"
+}

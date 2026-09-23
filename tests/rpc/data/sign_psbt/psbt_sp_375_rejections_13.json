@@ -1,0 +1,9 @@
+{
+  "id": "foreign_origin",
+  "description": "A matching P2WPKH script with a foreign origin is not Jade-owned",
+  "input": {
+    "network": "localtest",
+    "psbt": "b64:cHNidP8BAgQCAAAAAQQBAQEFAQEBBgEAAfsEAgAAAAABAHECAAAAARinF2Y7C6sUsSoadxMj/x5Aed1TLl3RPijqEIHHAJhKAAAAAAD+////AqCGAQAAAAAAFgAU7TjbCZtVOTtHiU9JCKBAQl1915ughgEAAAAAABYAFDSWLUEqVomqEjNymRZhyDeKUy1hAAAAAAEBH6CGAQAAAAAAFgAUNJYtQSpWiaoSM3KZFmHIN4pTLWEiBgLqeZVtahhAkcTa4XeLDOvyj6y4fBGLflbLL9lPxELBQBjerb7vVAAAgAEAAIAAAACAAAAAAAAAAAABDiCSwS8g1HgJR2Y+qzA1/Iq2HicF7AT8l6x6q6MfSIrQeQEPBAEAAAABEAT+////AAEDCBhzAQAAAAAAAQlCAnKZbNc39E/8SqmZ7WBllxdgCt9ZrxQUeuEWVhvNHmNOA8ydL/uk8jUzL52szTJoXC/Xr0mYPbeV0YmdMsnsG23RAA=="
+  },
+  "validation_result": "invalid"
+}

@@ -1,0 +1,17 @@
+{
+  "id": "mixed_owned_foreign_contribution",
+  "description": "Jade contributes only its owned input to a mixed-input payment",
+  "input": {
+    "network": "localtest",
+    "psbt": "b64:cHNidP8BAgQCAAAAAQQBAgEFAQEBBgEAAfsEAgAAAAABAHECAAAAARinF2Y7C6sUsSoadxMj/x5Aed1TLl3RPijqEIHHAJhKAAAAAAD+////AqCGAQAAAAAAFgAU7TjbCZtVOTtHiU9JCKBAQl1915ughgEAAAAAABYAFDSWLUEqVomqEjNymRZhyDeKUy1hAAAAAAEBH6CGAQAAAAAAFgAUNJYtQSpWiaoSM3KZFmHIN4pTLWEBAwQBAAAAIgYC6nmVbWoYQJHE2uF3iwzr8o+suHwRi35Wyy/ZT8RCwUAYWdHzsFQAAIABAACAAAAAgAAAAAAAAAAAAQ4gksEvINR4CUdmPqswNfyKth4nBewE/JesequjH0iK0HkBDwQBAAAAARAE/v///yIdAnKZbNc39E/8SqmZ7WBllxdgCt9ZrxQUeuEWVhvNHmNOIQLTb+kJkuPZ6VWZsHMMaSxGZQ3JdjYSoiUDmeAZoA4IdCIeAnKZbNc39E/8SqmZ7WBllxdgCt9ZrxQUeuEWVhvNHmNOQMNmLnYUhosx+16t0YcqXdqFLWdjjl/eSyOYBdhFN9s0aZAWV/jQMexpYlWfqvQtnrVbpn6iQYglqTaGAcOI4SsAAQBxAgAAAAG+nWXIORX7CSSKu9/KjKPu5s41DFVPZejVJuXfUnq1IgAAAAAA/v///wKghgEAAAAAABYAFKNCIuLW89MlfbU+88UryiCkyDkqoIYBAAAAAAAWABSZBxUEhrrFaA+bRv3mMA5p6OT2IwAAAAABAR+ghgEAAAAAABYAFJkHFQSGusVoD5tG/eYwDmno5PYjIgYDvYTxIfMyWzxJ/szCDPJ0p9Thc7PjFiLcHEzxq6aF2BoYP2NaY1QAAIABAACAAAAAgAAAAAABAAAAAQ4gFQgp9nvhv7X5dmA7uWCXOuVyC09SNPhdjXoKtf7I/xQBDwQBAAAAARAE/v///wABAwgw5gIAAAAAAAEJQgJymWzXN/RP/Eqpme1gZZcXYArfWa8UFHrhFlYbzR5jTgPMnS/7pPI1My+drM0yaFwv169JmD23ldGJnTLJ7Btt0QA="
+  },
+  "validation_result": "valid",
+  "expected_contribution": {
+    "share_input_indices": [
+      0
+    ],
+    "unresolved_output_indices": [
+      0
+    ]
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "id": "decoy_same_origin_p2pkh",
+  "description": "Jade resolves a P2PKH input whose decoy shares its own origin",
+  "input": {
+    "network": "localtest",
+    "psbt": "b64:cHNidP8BAgQCAAAAAQQBAQEFAQEBBgEAAfsEAgAAAAABAHQCAAAAAfTCEtWu0ef2/2M/LOCcZHxXvt2TAxTZjed1A9WOlAszAAAAAAD+////AqCGAQAAAAAAFgAUzfQB4UAQ1tEydtg66oHtO31K3Y2ghgEAAAAAABl2qRQs/iaX/ed2hn0HxNCk3RmB5FGzwIisAAAAACIGAn7rU3mMKeHRmtnElI/Of0/RP2W6JaMQATDsXUdHvx1UGFnR87AsAACAAQAAgAAAAIAAAAAAAgAAACIGA7w3Wtw4AwkrWWfO2ZNqSDgr+6k9akKPn8iGrKQ6H8YNGFnR87AsAACAAQAAgAAAAIAAAAAAAAAAAAEOIPlUuFGyynnD6CNvfe7UonBdbv8CxWECIL0w2gZGjmCXAQ8EAQAAAAEQBP7///8AAQMIGHMBAAAAAAABCUICcpls1zf0T/xKqZntYGWXF2AK31mvFBR64RZWG80eY04DzJ0v+6TyNTMvnazNMmhcL9evSZg9t5XRiZ0yyewbbdEA"
+  },
+  "validation_result": "valid",
+  "expected_scripts": [
+    {
+      "output_index": 0,
+      "script": "0x512058c25c4ff4662e99ec1b5dc8415ae7ba5a936c89c9471d0014082e6374972cd2"
+    }
+  ]
+}
