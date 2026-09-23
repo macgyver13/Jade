@@ -46,9 +46,6 @@ bool sp_encode_address(const network_t network_id, const uint8_t* sp_v0_info, co
     return ret;
 }
 
-// The BIP352 child paths beneath the account node - m/352'/coin'/account'/x'/0
-#define SP_SCAN_KEY_BRANCH 1
-#define SP_SPEND_KEY_BRANCH 0
 #define SP_KEY_PATH_LEN (SP_EXPORT_PATH_LEN + 2)
 
 // A BIP392 spscan key expression: the scan private key followed by the spend
