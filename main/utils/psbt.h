@@ -23,6 +23,7 @@ typedef struct key_iter_t {
     bool is_input;
     bool is_private;
     bool is_taproot;
+    bool is_sp;
     bool is_valid;
     bool is_ga_2of3_recovery_key;
 } key_iter;
