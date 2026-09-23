@@ -22,17 +22,53 @@
 #define ADDR_TEXTSPLITLEN (MAX_DISPLAY_ADDRESS_LEN / ADDR_GRID_SIZE)
 #endif // ADDRESS_STRING_GRID
 
+// Silent payment addresses run to 117 characters, which paged across two screens
+// and made comparing against another wallet awkward. Drop the middle and keep
+// both ends instead, as desktop wallets do.
+#if ADDRESS_STRING_GRID
+// Give the ellipsis a cell of its own so the grid stays aligned
+#define ADDR_ELLIPSIS "...."
+#define ADDR_ELLIPSIS_HEAD 48
+#else
+#define ADDR_ELLIPSIS "..."
+#define ADDR_ELLIPSIS_HEAD 47
+#endif // ADDRESS_STRING_GRID
+
+#define ADDR_ELLIPSIS_LEN (sizeof(ADDR_ELLIPSIS) - 1)
+#define ADDR_ELLIPSIS_TAIL (MAX_DISPLAY_ADDRESS_LEN - ADDR_ELLIPSIS_HEAD - ADDR_ELLIPSIS_LEN)
+
+// Elide the middle of an over-long address so it fits a single screen
+static void truncate_address_middle(
+    const char* address, const size_t addrlen, char* output, const size_t output_len)
+{
+    JADE_ASSERT(address);
+    JADE_ASSERT(addrlen > MAX_DISPLAY_ADDRESS_LEN);
+    JADE_ASSERT(output);
+    JADE_ASSERT(output_len > MAX_DISPLAY_ADDRESS_LEN);
+
+    const int ret = snprintf(output, output_len, "%.*s" ADDR_ELLIPSIS "%s", ADDR_ELLIPSIS_HEAD, address,
+        address + addrlen - ADDR_ELLIPSIS_TAIL);
+    JADE_ASSERT(ret == MAX_DISPLAY_ADDRESS_LEN);
+}
+
 // also used in sign_tx
 gui_activity_t* make_display_address_activities(const char* title, const bool show_one_screen_tick, const char* address,
-    const bool default_selection, gui_activity_t** actaddr2)
+    const bool truncate_long, const bool default_selection, gui_activity_t** actaddr2)
 {
     JADE_ASSERT(address);
     JADE_INIT_OUT_PPTR(actaddr2);
 
     gui_activity_t* act;
 
-    const size_t addrlen = strlen(address);
+    char truncated[MAX_DISPLAY_ADDRESS_LEN + 1];
+    size_t addrlen = strlen(address);
     JADE_ASSERT(addrlen <= MAX_ADDRESS_SCREENS * MAX_DISPLAY_ADDRESS_LEN);
+
+    if (truncate_long && addrlen > MAX_DISPLAY_ADDRESS_LEN) {
+        truncate_address_middle(address, addrlen, truncated, sizeof(truncated));
+        address = truncated;
+        addrlen = MAX_DISPLAY_ADDRESS_LEN;
+    }
 
 #if ADDRESS_STRING_GRID
     size_t num_words = 0; // Number of 'words' string is split into
@@ -121,7 +157,8 @@ gui_activity_t* make_display_address_activities(const char* title, const bool sh
     return act;
 }
 
-bool show_confirm_address_activity_ex(const char* title, const char* address, const bool default_selection)
+bool show_confirm_address_activity_ex(
+    const char* title, const char* address, const bool truncate_long, const bool default_selection)
 {
     JADE_ASSERT(title);
     JADE_ASSERT(address);
@@ -130,7 +167,7 @@ bool show_confirm_address_activity_ex(const char* title, const char* address, co
     const bool show_tick = true;
     gui_activity_t* act_addr2 = NULL;
     gui_activity_t* const act_addr1
-        = make_display_address_activities(title, show_tick, address, default_selection, &act_addr2);
+        = make_display_address_activities(title, show_tick, address, truncate_long, default_selection, &act_addr2);
 
     gui_activity_t* act = act_addr1;
 
@@ -158,6 +195,6 @@ bool show_confirm_address_activity_ex(const char* title, const char* address, co
 
 bool show_confirm_address_activity(const char* address, const bool default_selection)
 {
-    return show_confirm_address_activity_ex("Verify Address", address, default_selection);
+    return show_confirm_address_activity_ex("Verify Address", address, false, default_selection);
 }
 #endif // AMALGAMATED_BUILD
