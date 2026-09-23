@@ -2,12 +2,14 @@
 #define SIGN_UTILS_H_
 
 #include "../jade_assert.h"
+#include "../utils/address.h"
 #include "process_utils.h"
 
 typedef enum { TXTYPE_SEND_PAYMENT, TXTYPE_SWAP } TxType_t;
 
 typedef struct _output_info {
     char message[128];
+    char sp_address[MAX_ADDRESS_LEN];
     uint8_t blinding_key[33];
     uint8_t asset_id[32];
     uint64_t value;
