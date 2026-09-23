@@ -17,7 +17,8 @@
 
 // from confirm_address
 gui_activity_t* make_display_address_activities(const char* title, bool show_one_screen_tick, const char* address,
-    bool default_selection, gui_activity_t** actaddr2);
+    bool truncate_long, bool default_selection, gui_activity_t** actaddr2);
+bool show_confirm_address_activity_ex(const char* title, const char* address, bool truncate_long, bool default_selection);
 
 // A warning to display if the asset registry data is missing
 static const char MISSING_ASSET_DATA[] = "Amounts may be shown in the wrong units.      Continue at your own   risk.";
@@ -250,7 +251,8 @@ static gui_activity_t* make_input_output_activities(const char* title, const boo
     const bool default_selection = true;
     const char* addr_label_title = is_address ? "To Address" : "Description";
     *actaddr1
-        = make_display_address_activities(addr_label_title, show_tick, address_label, default_selection, actaddr2);
+        = make_display_address_activities(
+            addr_label_title, show_tick, address_label, false, default_selection, actaddr2);
 
     // Second row, amount + ticker
     gui_view_node_t* splitamount;
@@ -461,6 +463,7 @@ bool show_btc_transaction_outputs_activity(
 
         char address[MAX_ADDRESS_LEN];
         script_to_address(network_id, out->script, out->script_len, out->satoshi > 0, address, sizeof(address));
+        const bool is_silent_payment = output_info && (output_info[i].flags & OUTPUT_FLAG_SILENT_PAYMENT);
         const bool is_address = true;
 
         // Show output info
@@ -469,6 +472,14 @@ bool show_btc_transaction_outputs_activity(
                 title, is_wallet_output, is_address, address, amount, TICKER_BTC, NULL, NULL, msg)) {
             // User pressed 'cancel'
             return false;
+        }
+        // The silent payment address is far longer than the derived address it
+        // resolves to, so give it a full screen of its own, elided in the middle.
+        if (is_silent_payment) {
+            JADE_ASSERT(output_info[i].sp_address[0] != '\0');
+            if (!show_confirm_address_activity_ex("Silent Payment", output_info[i].sp_address, true, true)) {
+                return false;
+            }
         }
         // else user pressed 'next', continue to next output
     }

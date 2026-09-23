@@ -16,6 +16,7 @@ import _thread
 
 import wallycore as wally
 from jadepy.jade import JadeAPI, JadeError
+import test_sp_roundtrip
 
 LIQUID_DESCRIPTORS = True
 
@@ -2064,6 +2065,235 @@ def _check_tx_signatures(jadeapi, testcase, rslt):
                           host_entropy, signer_commitment, rawsig, is_schnorr=is_p2tr)
 
 
+def _read_compact_size(data, offset):
+    value = data[offset]
+    offset += 1
+    if value < 0xfd:
+        return value, offset
+    size = {0xfd: 2, 0xfe: 4, 0xff: 8}[value]
+    return int.from_bytes(data[offset:offset + size], 'little'), offset + size
+
+
+def _write_compact_size(value):
+    if value < 0xfd:
+        return bytes([value])
+    if value <= 0xffff:
+        return b'\xfd' + value.to_bytes(2, 'little')
+    if value <= 0xffffffff:
+        return b'\xfe' + value.to_bytes(4, 'little')
+    return b'\xff' + value.to_bytes(8, 'little')
+
+
+def _read_psbt_map(data, offset):
+    fields = []
+    while data[offset]:
+        key_len, offset = _read_compact_size(data, offset)
+        key = data[offset:offset + key_len]
+        offset += key_len
+        value_len, offset = _read_compact_size(data, offset)
+        value = data[offset:offset + value_len]
+        offset += value_len
+        fields.append((key, value))
+    return fields, offset + 1
+
+
+def _write_psbt_map(fields):
+    result = bytearray()
+    for key, value in fields:
+        result += _write_compact_size(len(key)) + key
+        result += _write_compact_size(len(value)) + value
+    return bytes(result) + b'\x00'
+
+
+def _parse_psbt_maps(psbt):
+    psbt = bytes(psbt)
+    assert psbt[:5] == b'psbt\xff'
+    offset = 5
+    globals_, offset = _read_psbt_map(psbt, offset)
+    globals_by_key = dict(globals_)
+    num_inputs = int.from_bytes(globals_by_key[b'\x04'], 'little')
+    num_outputs = int.from_bytes(globals_by_key[b'\x05'], 'little')
+    inputs, outputs = [], []
+    for _ in range(num_inputs):
+        fields, offset = _read_psbt_map(psbt, offset)
+        inputs.append(fields)
+    for _ in range(num_outputs):
+        fields, offset = _read_psbt_map(psbt, offset)
+        outputs.append(fields)
+    assert offset == len(psbt)
+    return globals_, inputs, outputs
+
+
+def _serialize_psbt_maps(globals_, inputs, outputs):
+    maps = [globals_, *inputs, *outputs]
+    return b'psbt\xff' + b''.join(_write_psbt_map(fields) for fields in maps)
+
+
+def _check_silent_payment_psbt(psbt, silent_payment_info):
+    globals_, inputs, outputs = _parse_psbt_maps(psbt)
+    globals_by_key = dict(globals_)
+    scan_key = silent_payment_info[:33]
+    assert globals_by_key.get(b'\x06', b'\x00') == b'\x00'
+    assert len(globals_by_key[b'\x07' + scan_key]) == 33
+    assert len(globals_by_key[b'\x08' + scan_key]) == 64
+    assert dict(inputs[0])[b'\x03'] == b'\x01\x00\x00\x00'
+    assert any(key[:1] == b'\x02' for key, _ in inputs[0])
+    assert dict(outputs[0])[b'\x09'] == silent_payment_info
+    script = dict(outputs[0])[b'\x04']
+    assert len(script) == 34 and script[:2] == b'\x51\x20'
+    return script, globals_by_key[b'\x08' + scan_key]
+
+
+def test_silent_payment_roundtrip(jadeapi, network='localtest'):
+    """Pay Jade's own silent payment address, then scan for the payment.
+
+    Checks the descriptor export and signing against each other, and the
+    BIP352 output against an implementation that is not the one Jade uses.
+    Skipped unless the vendored libwally has been built for the host.
+    """
+    if not test_sp_roundtrip.load_wally():
+        logger.warning('Skipping silent payment round trip - no libwally host build')
+        return
+    test_sp_roundtrip.run_roundtrip(jadeapi, network, verbose=False)
+
+
+def test_silent_payment_sign_psbt(jadeapi):
+    testcase = next(_get_test_cases('psbt_sp_resolve_sign.json'), None)
+    if testcase is None:
+        return  # Excluded by --json-filter
+    network = testcase['input']['network']
+    psbt = testcase['input']['psbt']
+    silent_payment_info = h2b(testcase['silent_payment_info'])
+
+    first = _check_silent_payment_psbt(jadeapi.sign_psbt(network, psbt), silent_payment_info)
+    second = _check_silent_payment_psbt(jadeapi.sign_psbt(network, psbt), silent_payment_info)
+    assert first[0] == second[0]
+    assert first[1] != second[1]
+
+    globals_, inputs, outputs = _parse_psbt_maps(psbt)
+    inputs[0].append((b'\x03', (2).to_bytes(4, 'little')))
+    try:
+        jadeapi.sign_psbt(network, _serialize_psbt_maps(globals_, inputs, outputs))
+        assert False, 'Non-SIGHASH_ALL silent payment PSBT accepted'
+    except JadeError as err:
+        assert err.message == 'Silent payments require SIGHASH_ALL', err.message
+
+    globals_, inputs, outputs = _parse_psbt_maps(psbt)
+    inputs[0] = [(key, value) for key, value in inputs[0] if key[:1] != b'\x06']
+    try:
+        jadeapi.sign_psbt(network, _serialize_psbt_maps(globals_, inputs, outputs))
+        assert False, 'Silent payment PSBT with a foreign eligible input accepted'
+    except JadeError as err:
+        expected = 'This silent payment implementation requires ownership of all eligible inputs'
+        assert err.message == expected, err.message
+
+    globals_, inputs, outputs = _parse_psbt_maps(psbt)
+    globals_ = [(key, b'\x00' if key == b'\x06' else value) for key, value in globals_]
+    outputs[0].append((b'\x04', b'\x51\x20' + bytes(32)))
+    try:
+        jadeapi.sign_psbt(network, _serialize_psbt_maps(globals_, inputs, outputs))
+        assert False, 'Mismatched silent payment output script accepted'
+    except JadeError as err:
+        expected = 'Failed to derive silent payment outputs, or a proposed script did not match'
+        assert err.message == expected, err.message
+
+
+def test_silent_payment_sighash(jadeapi):
+    """BIP375 allows an explicit sighash only as ALL, or DEFAULT on a taproot input.
+
+    Jade sets no sighash of its own: an absent field stays absent, and an
+    explicit one is signed with as given. The signature length shows which.
+    """
+    taproot = next(_get_test_cases('psbt_sp_375_owned_inputs_03.json'), None)
+    segwit = next(_get_test_cases('psbt_sp_375_owned_inputs_02.json'), None)
+    if taproot is None or segwit is None:
+        return  # Excluded by --json-filter
+    network = taproot['input']['network']
+    refused = 'Silent payments require SIGHASH_ALL, or SIGHASH_DEFAULT on a taproot input'
+
+    def with_sighash(psbt, sighash):
+        globals_, inputs, outputs = _parse_psbt_maps(psbt)
+        if sighash is not None:
+            inputs[0].append((b'\x03', sighash.to_bytes(4, 'little')))
+        return _serialize_psbt_maps(globals_, inputs, outputs)
+
+    def sign_taproot(sighash):
+        signed = _parse_psbt_maps(jadeapi.sign_psbt(network, with_sighash(taproot['input']['psbt'], sighash)))
+        fields = dict(signed[1][0])
+        assert b'\x13' in fields, 'Taproot input not signed'  # PSBT_IN_TAP_KEY_SIG
+        return fields
+
+    fields = sign_taproot(None)
+    assert b'\x03' not in fields
+    assert len(fields[b'\x13']) == 64  # SIGHASH_DEFAULT, no sighash byte appended
+
+    fields = sign_taproot(wally.WALLY_SIGHASH_DEFAULT)
+    assert fields[b'\x03'] == b'\x00\x00\x00\x00'
+    assert len(fields[b'\x13']) == 64
+
+    fields = sign_taproot(wally.WALLY_SIGHASH_ALL)
+    assert fields[b'\x03'] == b'\x01\x00\x00\x00'
+    assert len(fields[b'\x13']) == 65 and fields[b'\x13'][-1] == wally.WALLY_SIGHASH_ALL
+
+    for sighash in [wally.WALLY_SIGHASH_NONE, wally.WALLY_SIGHASH_SINGLE]:
+        try:
+            jadeapi.sign_psbt(network, with_sighash(taproot['input']['psbt'], sighash))
+            assert False, f'Taproot silent payment with sighash {sighash} accepted'
+        except JadeError as err:
+            assert err.message == refused, err.message
+
+    # SIGHASH_DEFAULT is only for taproot, so it is refused on a segwit v0 input
+    try:
+        jadeapi.sign_psbt(network, with_sighash(segwit['input']['psbt'], wally.WALLY_SIGHASH_DEFAULT))
+        assert False, 'Segwit v0 silent payment with SIGHASH_DEFAULT accepted'
+    except JadeError as err:
+        assert err.message == refused, err.message
+
+
+def test_descriptor_slip77_network_rules(jadeapi):
+    descriptor_no_slip77 = 'wsh(pkh(@0/<0;1>/*))'
+    descriptor_with_slip77 = 'ct(slip77(@B),wpkh(@0/<0;1>/*))'
+    signer = "[e3ebcc79/48'/1'/0'/2']tpubDDvj9CrVJ9kWXSL2kjtA8v53rZvTmL3HmWPvgD3hiTnD5KZuMkxSUsgGra\
+Z9vavB5JSA3F9s5E4cXuCte5rvBs5N4DjfxYssQk1L82Bq4FE"
+    blinding_key = EXPECTED_MASTER_BLINDING_KEY.hex()
+
+    if LIQUID_DESCRIPTORS:
+        # Liquid descriptor with SLIP-77 should pass
+        assert jadeapi.register_descriptor(
+            'localtest-liquid', 'liqs77ok', descriptor_with_slip77,
+            {'@B': blinding_key, '@0': signer}) is True
+
+        # Liquid descriptor without SLIP-77 should fail.
+        _test_bad_params(
+            jadeapi.jade,
+            ('liq_s77_miss', 'register_descriptor',
+             {'network': 'localtest-liquid', 'descriptor_name': 'liqnos77',
+              'descriptor': descriptor_no_slip77, 'datavalues': {'@0': signer}}),
+            'must use slip77 blinding for liquid network')
+    else:
+        # Liquid descriptors disabled: reject liquid descriptors up-front
+        _test_bad_params(
+            jadeapi.jade,
+            ('liq_s77_off', 'register_descriptor',
+             {'network': 'localtest-liquid', 'descriptor_name': 'liqoff77',
+              'descriptor': descriptor_with_slip77,
+              'datavalues': {'@B': blinding_key, '@0': signer}}),
+            'not supported on liquid')
+
+    # Non-liquid descriptor with SLIP-77 should fail
+    _test_bad_params(
+        jadeapi.jade,
+        ('btc_s77_bad', 'register_descriptor',
+         {'network': 'testnet', 'descriptor_name': 'btcs77bad',
+          'descriptor': descriptor_with_slip77,
+          'datavalues': {'@B': blinding_key, '@0': signer}}),
+        'Failed to parse descriptor')
+
+    # Non-liquid descriptor without SLIP-77 should pass.
+    assert jadeapi.register_descriptor(
+      'testnet', 'btcnos77', descriptor_no_slip77, {'@0': signer}) is True
+
+
 def run_api_tests(jadeapi, isble, qemu, authuser=False):
 
     rslt = jadeapi.clean_reset()
@@ -2113,6 +2343,22 @@ def run_api_tests(jadeapi, isble, qemu, authuser=False):
     assert len(startinfo) == NUM_VALUES_VERINFO
     has_psram = startinfo['JADE_FREE_SPIRAM'] > 0
     has_ble = startinfo['JADE_CONFIG'] == 'BLE'
+
+    # Test descriptor wallets
+    test_descriptor_slip77_network_rules(jadeapi)
+
+    # Sign single sig
+    # Single sig requires a different seed for the tests
+    rslt = jadeapi.set_seed(bytes.fromhex(TEST_SEED_SINGLE_SIG))
+    assert rslt is True
+
+    # Push the singlesig test mnemonic for tests which use it
+    rslt = jadeapi.set_mnemonic(TEST_MNEMONIC_SINGLE_SIG)
+    assert rslt is True
+
+    test_silent_payment_sign_psbt(jadeapi)
+    if not args.json_filter:
+        test_silent_payment_roundtrip(jadeapi)
 
     # restore the mnemonic
     rslt = jadeapi.set_mnemonic(TEST_MNEMONIC)
